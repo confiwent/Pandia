@@ -54,6 +54,34 @@ above capacity, utilisation up to 0.94 in stable segments, queuing delay
 peaks ~300 ms at capacity drops, overall utilisation 48.7 % (GCC ramps up
 slowly after a drop), frame delay 52 ms, freeze rate (120 ms) 0.37 %.
 
+## Closed-loop test of our own estimators (`run_policy.py`)
+
+```bash
+python localtest/run_policy.py 07482.json --policy localtest/models/miql_3c27_79200.onnx
+python localtest/run_policy.py 07482.json --policy gcc
+```
+(same `docker run` wrapper as above). Models are not in git; copy them to
+`localtest/models/` (MetaBand x3-maml-s1 `miql_3c27_79200.onnx`, the paper's
+`sjtu-metaband.onnx` and `Schaferct_model.onnx` from s126).
+
+- state: Pandia's raw `array_bec()` (MMSys'24 order, newest MI first, as in
+  the dataset) × the offline evaluation's `NORMAL_VECTOR`, fed as `obs`
+  [1,1,150]; recurrent inputs are zeros; estimate = `output[0,0,0]` bps;
+- action: the public build's own shm fields, field 0 (encoder target) =
+  estimate and field 1 (pacing rate) = 2.5 × estimate (WebRTC's default pacing
+  factor); `Action.write()` divides by K = 1024, compensated in the script;
+  `--policy gcc` leaves both at 0 (GCC in control);
+- output `results_local/<trace>/<tag>_<time>/`: `<trace>.json` with per-step
+  observations / bandwidth_predictions / true_capacity (MMSys'24 layout, bps),
+  `summary.json` (ER / OER / MSE with the offline formulas, utilisation,
+  freeze / score), Pandia's QoS plots.
+
+Source video: Big Buck Bunny (Blender, `big_buck_bunny_720p_h264.mov`),
+60–90 s, scaled to 1280×720 at 25 fps, raw I420 (`docker_mnt/media/drive_720p.yuv`,
+750 frames, looped by WebRTC); made with `pandia-tools:local`
+(`Dockerfile.tools`, ffmpeg + libvmaf; apt over HTTPS because the local proxy
+returns 502 on plain-HTTP mirrors).
+
 ## Known issues seen in the first run (07488, constant ~1 Mbps, RBWE's tc.sh)
 
 - `tc.sh` replays obs[35] (queuing delay) as netem delay (up to ~450 ms) and obs[105]×50 as loss (up to ~5 %) → GCC backs off from ~0.95 to ~0.03 Mbps although capacity is constant.
