@@ -27,6 +27,8 @@ import pandia.agent.env_emulator_offline as E  # noqa: E402
 
 HOST_PANDIA = os.environ["HOST_PANDIA"]
 IMAGE = os.environ.get("EMULATOR_IMAGE", "pandia-emulator:local")
+# sb3_client_local = trace_replay.py; sb3_client = RBWE's original tc.sh replay
+CLIENT = os.environ.get("EMULATOR_CLIENT", "sb3_client_local")
 
 
 def start_container(self):
@@ -41,7 +43,7 @@ def start_container(self):
            f'--env LOGGING_PATH={self.logging_path} '
            f'--env SB3_LOGGING_PATH={self.sb3_logging_path} '
            f'--env CTRL_SOCKET_PATH={self.ctrl_socket_path} '
-           f'{IMAGE} python -um sb3_client')
+           f'{IMAGE} python -um {CLIENT}')
     print(cmd, flush=True)
     os.system(cmd)
     self.container = self.docker_client.containers.get(self.container_name)

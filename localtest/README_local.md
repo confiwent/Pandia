@@ -30,9 +30,34 @@ docker run --rm --name pandia-driver-run \
 ```
 (In Git Bash prefix with `MSYS_NO_PATHCONV=1`.) Results: `results_zte1/trace_<id>/…/` (plots, `score.txt`, `freeze.txt`, `<id>.json`).
 
-## Known issues seen in the first run (07488, constant ~1 Mbps)
+## Trace replay (`emulator/trace_replay.py`, default)
+
+The emulator runs `sb3_client_local.py`, which keeps RBWE's start command but
+replaces `tc.sh` + `get_tbf_rate()`:
+
+- capacity = `true_capacity` / 1000 kbit, no clipping or skipped steps (floor 10 kbit);
+- loss = `true_loss_rate` (already in %, ramps in 0.6 % steps; matches the
+  observed loss ratio, e.g. 4.78 % vs 0.0477 on 07488);
+- fixed one-way delay = the start command's `delay` (20 ms in `test_single`);
+  per-step delay is not replayed because the dataset's delay features carry an
+  unknown clock offset (min-seen delay ~196 ms, some delays negative);
+- step i is applied at t0 + i·60 ms (07482: apply lag p50 0.1 ms, p99 3.8 ms,
+  no drift over 118 s); tc is called only on changes;
+- tbf `latency 300ms` (queue holds 300 ms at any rate), burst max(3000 B, 5 ms);
+- the true capacity is pushed to the observer socket every step;
+- per-step log: `/tmp/<uuid>_obs_replay.csv` in the Docker VM.
+
+`EMULATOR_CLIENT=sb3_client` switches back to RBWE's `tc.sh`.
+
+Check on 07482 (0.22–1.6 Mbps, no loss), GCC in control: receiving rate never
+above capacity, utilisation up to 0.94 in stable segments, queuing delay
+peaks ~300 ms at capacity drops, overall utilisation 48.7 % (GCC ramps up
+slowly after a drop), frame delay 52 ms, freeze rate (120 ms) 0.37 %.
+
+## Known issues seen in the first run (07488, constant ~1 Mbps, RBWE's tc.sh)
 
 - `tc.sh` replays obs[35] (queuing delay) as netem delay (up to ~450 ms) and obs[105]×50 as loss (up to ~5 %) → GCC backs off from ~0.95 to ~0.03 Mbps although capacity is constant.
-- "True capacity" is parsed from `tc` output without its unit (`1Mbit` → 1 kbit), so it is 0 for the first steps and ER/OER become inf.
+- "True capacity" is parsed from `tc` output without its unit (`1Mbit` → 1 kbit), so it is 0 for the first steps and ER/OER become inf (fixed by the new replay).
+- `pandia.constants` has K = 1024: `test_single` divides the capacity (kbit) by 1024 but the prediction (bps) by 1024², a 1000/1024 mismatch (~2.4 %) in its ER/MSE.
 - No frames are dumped to `res_video/` with the public binary, so `cal_vmaf.sh` has nothing to score.
 - Video only, no audio track.

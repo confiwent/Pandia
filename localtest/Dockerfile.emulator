@@ -7,10 +7,12 @@ FROM pandia-emubase:local
 COPY app/ /app/
 COPY rbwe/sb3_client.py /app/sb3_client.py
 COPY rbwe/pandia /app/pandia
+# trace replay that replaces RBWE's tc.sh (see emulator/trace_replay.py)
+COPY emulator/trace_replay.py emulator/sb3_client_local.py /app/
 COPY nvstub/libcuda.so.1 nvstub/libnvidia-encode.so.1 nvstub/libnvcuvid.so.1 /usr/local/lib/nvstub/
 ENV LD_LIBRARY_PATH=/usr/local/lib/nvstub
 # RBWE starts /app/simulation_video_save, which is not public; the public build
 # ignores shm field 7 (prediction_bandwidth), so this runs GCC.
 RUN chmod +x /app/simulation_Release && ln -sf /app/simulation_Release /app/simulation_video_save
 WORKDIR /app
-CMD ["python", "-um", "sb3_client"]
+CMD ["python", "-um", "sb3_client_local"]
