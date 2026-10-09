@@ -82,6 +82,48 @@ Source video: Big Buck Bunny (Blender, `big_buck_bunny_720p_h264.mov`),
 (`Dockerfile.tools`, ffmpeg + libvmaf; apt over HTTPS because the local proxy
 returns 502 on plain-HTTP mirrors).
 
+## Receiver-side features, audio flow, RTCP bypass (plan B)
+
+- `emulator/rx_capture.py`: AF_PACKET on lo captures every RTP packet after the
+  shaping qdisc (= arrival at the receiver) and forwards (arrival, abs-send-time,
+  PT, seq, SSRC, size, padding-only) to the driver. All WebRTC video packets
+  carry abs-send-time (extmap id 2); it is stamped on CLOCK_MONOTONIC, the same
+  clock as the capture, so arrival - send is the one-way delay.
+- `emulator/audio_flow.py`: Opus-like audio, one 100 B RTP packet (PT 111) per
+  frame with abs-send-time, through the same bottleneck (`--no-audio` turns it
+  off). The Pandia sender itself has only a video track. The frame interval is
+  set per trace from its audio packet rate (median audio packets per 60 ms MI,
+  snapped to 20/30/40/60 ms): 20 ms in 72, 60 ms in 43, 30 ms in 33 of the 148
+  subset calls.
+- `rx_features.py`: the 150-dim observation on the receiver side. Delay
+  definitions recovered from identities that hold exactly in the emulated test
+  set: with D = OWD - OWD(first packet) + 200 ms, delay = mean D - 200,
+  min seen = min D over the call (data: 196-200), queuing = mean D - min seen,
+  ratio = mean D / min D in the MI, avg-min diff = mean D - min D in the MI;
+  loss ratio = lost / (lost + received) (exact). Interarrival is an approximate
+  fit; jitter (std of gaps) cannot be identified from the data.
+- `emulator/trace_replay.py`: root prio qdisc; RTCP (UDP payload byte 1 in
+  200-207, offset 29) goes through a delay-only band, media through
+  netem (delay + loss) -> tbf. Before, feedback queued behind the video on the
+  shared lo bottleneck. Queue length `--queue-ms`, default 1000 ms: the
+  per-call maximum queuing delay in the subset has median 240 ms, p90 955 ms,
+  max 2754 ms (a lower bound of the buffer, the behaviour policies do not
+  always fill it); with 300 / 600 ms the GCC runs on 07482 had their p99
+  queuing delay cut at ~359 / 645 ms while the test set reaches 991 ms.
+
+## Closed-loop test subset
+
+`docker_mnt/traffic_shell/subset148.txt`: 148 of the 9405 emulated test calls,
+stratified by behaviour policy (v0-v4) x capacity constant/varying x loss
+yes/no (20 strata, proportional), spread over mean capacity within each
+stratum (seed 20261009). Copy the JSONs into `trace_data/` (not in git).
+- `run_policy.py --features receiver` (default) feeds the receiver-side
+  observation to the policy; both `observations_rx` and Pandia's sender-side
+  `observations_tx` are saved.
+
+GCC smoke test on 07482 (BBB + audio): audio / video share 0.43 / 0.57
+(test set 0.33 / 0.67, sender side 0 / 1), 827 RTCP packets took the bypass.
+
 ## Known issues seen in the first run (07488, constant ~1 Mbps, RBWE's tc.sh)
 
 - `tc.sh` replays obs[35] (queuing delay) as netem delay (up to ~450 ms) and obs[105]×50 as loss (up to ~5 %) → GCC backs off from ~0.95 to ~0.03 Mbps although capacity is constant.

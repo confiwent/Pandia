@@ -8,7 +8,7 @@ COPY app/ /app/
 COPY rbwe/sb3_client.py /app/sb3_client.py
 COPY rbwe/pandia /app/pandia
 # trace replay that replaces RBWE's tc.sh (see emulator/trace_replay.py)
-COPY emulator/trace_replay.py emulator/sb3_client_local.py /app/
+COPY emulator/trace_replay.py emulator/sb3_client_local.py emulator/rx_capture.py emulator/audio_flow.py /app/
 COPY nvstub/libcuda.so.1 nvstub/libnvidia-encode.so.1 nvstub/libnvcuvid.so.1 /usr/local/lib/nvstub/
 ENV LD_LIBRARY_PATH=/usr/local/lib/nvstub
 # RBWE starts /app/simulation_video_save, which is not public; the public build

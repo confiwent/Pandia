@@ -12,8 +12,16 @@ Replaces RBWE's tc.sh + get_tbf_rate():
   * the true capacity of every step is reported to the observer socket
     (msg type 4, {"rate": kbit}) instead of parsing `tc -s qdisc show`
 
-Qdisc layout (as in Pandia): root netem (delay, loss) -> child tbf (rate).
-tbf uses `latency` so the queue holds the same time worth of data at any rate.
+Qdisc layout on lo (sender, receiver and the audio flow all use lo):
+
+    root prio (2 bands, everything -> band 2)
+      band 1 (1:1): netem delay            <- RTCP (feedback), u32 filter on PT 200-207
+      band 2 (1:2): netem delay + loss -> tbf rate   <- media (RTP), STUN/DTLS
+
+so feedback is delayed like the media but neither shaped, queued behind the
+video nor dropped (separate up/down links, as in a real path and in the
+dataset's receiver-side estimator). tbf uses `latency` so the queue holds the
+same time worth of data at any rate.
 """
 import json
 import math
@@ -26,8 +34,10 @@ DEV = "lo"
 
 
 def _tc(args):
-    subprocess.run(["tc"] + args, check=False,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    r = subprocess.run(["tc"] + args, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        print("tc", " ".join(args), "->", r.stderr.decode().strip(), flush=True)
 
 
 def _burst_bytes(kbit):
@@ -64,13 +74,28 @@ class TraceReplayer(threading.Thread):
             last = v
         return out
 
-    def _setup(self, kbit, loss):
-        _tc(["qdisc", "del", "dev", DEV, "root"])
-        _tc(["qdisc", "add", "dev", DEV, "root", "handle", "1:", "netem",
+    def _netem_media(self, verb, loss):
+        _tc(["qdisc", verb, "dev", DEV, "parent", "1:2", "handle", "20:", "netem",
              "delay", f"{self.delay_ms}ms", "loss", f"{loss}%"])
-        _tc(["qdisc", "add", "dev", DEV, "parent", "1:", "handle", "2:", "tbf",
+
+    def _tbf(self, verb, kbit):
+        _tc(["qdisc", verb, "dev", DEV, "parent", "20:1", "handle", "30:", "tbf",
              "rate", f"{kbit}kbit", "burst", str(_burst_bytes(kbit)),
              "latency", f"{self.queue_ms}ms"])
+
+    def _setup(self, kbit, loss):
+        subprocess.run(["tc", "qdisc", "del", "dev", DEV, "root"], stderr=subprocess.DEVNULL)
+        _tc(["qdisc", "add", "dev", DEV, "root", "handle", "1:", "prio", "bands", "2",
+             "priomap"] + ["1"] * 16)
+        _tc(["qdisc", "add", "dev", DEV, "parent", "1:1", "handle", "10:", "netem",
+             "delay", f"{self.delay_ms}ms"])
+        self._netem_media("add", loss)
+        self._tbf("add", kbit)
+        # RTCP: UDP payload byte 1 (packet type) in 200..207. The IP header on
+        # lo has no options (20 B), so that byte is at offset 20 + 8 + 1 = 29.
+        _tc(["filter", "add", "dev", DEV, "parent", "1:", "protocol", "ip", "prio", "1",
+             "u32", "match", "ip", "protocol", "17", "0xff",
+             "match", "u8", "0xc8", "0xf8", "at", "29", "flowid", "1:1"])
 
     def _report(self, sock, kbit):
         try:
@@ -100,12 +125,9 @@ class TraceReplayer(threading.Thread):
                 self._setup(kbit, loss)
             else:
                 if loss != last_loss:
-                    _tc(["qdisc", "change", "dev", DEV, "root", "handle", "1:", "netem",
-                         "delay", f"{self.delay_ms}ms", "loss", f"{loss}%"])
+                    self._netem_media("change", loss)
                 if kbit != last_kbit:
-                    _tc(["qdisc", "change", "dev", DEV, "parent", "1:", "handle", "2:", "tbf",
-                         "rate", f"{kbit}kbit", "burst", str(_burst_bytes(kbit)),
-                         "latency", f"{self.queue_ms}ms"])
+                    self._tbf("change", kbit)
             applied = time.monotonic()
             self._report(sock, kbit)
             if log:
