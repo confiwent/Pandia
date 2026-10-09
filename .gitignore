@@ -29,3 +29,7 @@ docker_mnt/traffic_shell/trace_data*/
 /*.py
 
 json_bwe_plot.py
+# local evaluation outputs
+results_zte1/
+docker_mnt/media/res_video/
+docker_mnt/media/*.yuv

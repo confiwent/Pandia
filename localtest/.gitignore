@@ -1,0 +1,7 @@
+# large or derived files: rebuild/fetch them as described in README_local.md
+app/
+rbwe/
+media/
+simulation_Release
+nvstub/*.so.1
+*.log

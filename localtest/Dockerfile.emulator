@@ -1,0 +1,16 @@
+# Local Pandia emulator for a no-GPU Docker Desktop host.
+#   app/   = /app of johnson163/pandia_emulator (layer 2e6768f8, 2024-02-03):
+#            simulation_Release (WebRTC, OpenH264 when NVENC is unset) + media
+#   rbwe/  = RBWE's sb3_client.py (trace replay via tc.sh) and pandia package
+#   nvstub = no-device stubs for libcuda / libnvidia-encode / libnvcuvid
+FROM pandia-emubase:local
+COPY app/ /app/
+COPY rbwe/sb3_client.py /app/sb3_client.py
+COPY rbwe/pandia /app/pandia
+COPY nvstub/libcuda.so.1 nvstub/libnvidia-encode.so.1 nvstub/libnvcuvid.so.1 /usr/local/lib/nvstub/
+ENV LD_LIBRARY_PATH=/usr/local/lib/nvstub
+# RBWE starts /app/simulation_video_save, which is not public; the public build
+# ignores shm field 7 (prediction_bandwidth), so this runs GCC.
+RUN chmod +x /app/simulation_Release && ln -sf /app/simulation_Release /app/simulation_video_save
+WORKDIR /app
+CMD ["python", "-um", "sb3_client"]
