@@ -136,6 +136,19 @@ active: 600 kbps" in pandia.log, pacing rate 1500 kbps, encoder target
 with GoogCC). `run_policy.py --control shm7` is the default; `--control
 shm01` keeps the earlier encoder/pacer override.
 
+## QoS metrics (`qos_metrics.py`, also run at the end of `run_policy.py` -> `qos.json`)
+
+- throughput: receiving rate (video + audio) of the newest 60 ms MI, mean; utilisation = / mean capacity
+- one-way packet delay: propagation delay + queuing delay of the MI (mean, p95)
+- packet loss: sum lost / sum (lost + received) over the MIs; packet jitter: mean of the interarrival-std feature
+- end-to-end frame delay: decoded utc - captured utc per frame (FrameCaptured,
+  SendPacket seq -> frame id, Frame decoding acked in pandia.log), p50 / p95 / std
+- freezes as WebRTC's getStats: decoded-frame interval > max(3 x avg, avg + 150 ms)
+  (avg of the previous 30 intervals); freeze count and total freeze time / call time.
+  Pandia's own "Freeze rate" (freeze.txt) is the share of frame intervals > 120 ms
+  and drops intervals > 1 s, so long freezes are not counted.
+- decoded fps, encoded video bitrate, median encoded resolution, mean QP.
+
 ## Closed-loop test subset
 
 `docker_mnt/traffic_shell/subset148.txt`: 148 of the 9405 emulated test calls,

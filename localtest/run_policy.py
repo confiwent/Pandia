@@ -52,6 +52,7 @@ from pandia.constants import K
 
 import run_rbwe_local  # noqa: F401  (patches start_container for this host)
 from rx_features import RxFeatures
+from qos_metrics import qos
 
 PACING_FACTOR = 2.5
 PROJECT = "/data2/kj/Workspace/Pandia"
@@ -223,6 +224,10 @@ def main():
         p = os.path.join(out_dir, name)
         if os.path.exists(p):
             summary[name] = open(p).read()
+    try:
+        summary["qos"] = qos(out_dir)        # deployment metrics, also in qos.json
+    except Exception as e:                   # keep the run even if parsing fails
+        summary["qos_error"] = repr(e)
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=1)
     print(json.dumps({k: v for k, v in summary.items() if not k.endswith(".txt")}, indent=1))
