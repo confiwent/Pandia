@@ -109,6 +109,7 @@ def main():
                     help="path to .onnx, 'gcc', or 'const:<bps>' (fixed estimate, for tests)")
     ap.add_argument("--delay", type=float, default=20, help="one-way delay, ms")
     ap.add_argument("--max-steps", type=int, default=0, help="0 = whole trace")
+    ap.add_argument("--tag", default="", help="results_local/<tag>/<trace>/... (batch name)")
     ap.add_argument("--min-bps", type=float, default=20e3)
     ap.add_argument("--features", choices=["receiver", "sender"], default="receiver")
     ap.add_argument("--control", choices=["shm7", "shm01"], default="shm7")
@@ -125,7 +126,9 @@ def main():
 
     if a.keep_cwnd:
         os.environ["PANDIA_EXT_KEEP_CWND"] = "1"
-    pkt_sock = f"/tmp/{uuid.uuid4().hex[:8]}_pkt.sock"
+    job_id = uuid.uuid4().hex[:8]
+    pkt_sock = f"/tmp/{job_id}_pkt.sock"
+    webrtc_log = f"/tmp/{job_id}_pandia.log"      # per job: batches run in parallel
     os.environ.update({"QUEUE_MS": str(a.queue_ms), "AUDIO": "0" if a.no_audio else "1",
                        "AUDIO_INTERVAL_MS": str(a.audio_interval_ms),
                        "PKT_SOCKET_PATH": pkt_sock})
@@ -143,7 +146,7 @@ def main():
     n_trace = len(json.load(open(trace_path))["true_capacity"])
     n_steps = min(n_trace, a.max_steps) if a.max_steps else n_trace
 
-    out_dir = os.path.join(PROJECT, "results_local", os.path.splitext(a.trace)[0],
+    out_dir = os.path.join(PROJECT, "results_local", a.tag, os.path.splitext(a.trace)[0],
                            f"{tag}_{datetime.now().strftime('%m%d%H%M%S')}")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -155,7 +158,7 @@ def main():
     gs = config["gym_setting"]
     gs.update({"print_step": True, "print_period": 1.0, "duration": 1e6,
                "step_duration": .06, "observation_durations": [.06, .6],
-               "history_size": 41, "logging_path": "/tmp/pandia.log",
+               "history_size": 41, "logging_path": webrtc_log,
                "skip_slow_start": 0, "enable_nvenc": False, "enable_nvdec": False,
                "action_cap": False})
     net_config = {"bw_file_name": a.trace, "delay": a.delay, "jitter": 0, "loss": 0}
@@ -205,7 +208,7 @@ def main():
            "pacing_factor": PACING_FACTOR, "observations": obs_log,
            "observations_rx": rx_log, "observations_tx": tx_log,
            "bandwidth_predictions": pred_log, "true_capacity": cap_log,
-           "t": ts_log}
+           "t": ts_log, "tag": a.tag}
     with open(os.path.join(out_dir, a.trace), "w") as f:
         json.dump(rec, f)
     cap = np.asarray(cap_log)
@@ -218,7 +221,8 @@ def main():
     if not is_gcc:
         summary.update(metrics(pred_log, cap_log))
 
-    shutil.copy("/tmp/pandia.log", out_dir)
+    shutil.copy(webrtc_log, os.path.join(out_dir, "pandia.log"))
+    os.remove(webrtc_log)
     generate_diagrams(out_dir, env.context, os.path.join(out_dir, "pandia.log"), cap / 1e6)
     for name in ("freeze.txt", "score.txt"):
         p = os.path.join(out_dir, name)

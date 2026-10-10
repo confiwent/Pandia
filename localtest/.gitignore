@@ -6,3 +6,5 @@ simulation_Release
 nvstub/*.so.1
 *.log
 models/*.onnx
+logs/
+logs_*.txt
