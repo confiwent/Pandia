@@ -68,14 +68,18 @@ def normal_vector():
 
 
 class OnnxPolicy:
-    def __init__(self, path):
+    """input_norm 'nv': obs * NORMAL_VECTOR (our MetaBand models); 'raw': the raw
+    observation, for models that normalise internally as the MMSys'24 challenge
+    expects (Schaferct: ER 0.724 with NORMAL_VECTOR vs 0.386 raw on the subset)."""
+
+    def __init__(self, path, input_norm="nv"):
         self.sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
         self.extras = {}
         for inp in self.sess.get_inputs():
             if inp.name != "obs":
                 shape = [1 if (not isinstance(d, int) or d <= 0) else d for d in inp.shape]
                 self.extras[inp.name] = np.zeros(shape, dtype=np.float32)
-        self.nv = normal_vector()
+        self.nv = normal_vector() if input_norm == "nv" else np.ones(150, dtype=np.float32)
 
     def __call__(self, obs_raw):
         feed = {"obs": (obs_raw * self.nv).astype(np.float32).reshape(1, 1, -1)}
@@ -113,6 +117,8 @@ def main():
     ap.add_argument("--min-bps", type=float, default=20e3)
     ap.add_argument("--features", choices=["receiver", "sender"], default="receiver")
     ap.add_argument("--control", choices=["shm7", "shm01"], default="shm7")
+    ap.add_argument("--input-norm", choices=["auto", "nv", "raw"], default="auto",
+                    help="auto: raw for Schaferct*, NORMAL_VECTOR otherwise")
     ap.add_argument("--keep-cwnd", action="store_true",
                     help="shm7: keep GoogCC's congestion window (PANDIA_EXT_KEEP_CWND)")
     ap.add_argument("--queue-ms", type=int, default=1000, help="bottleneck queue (tbf latency)")
@@ -141,7 +147,9 @@ def main():
         const_bps = float(a.policy.split(":", 1)[1])
         policy, tag = (lambda obs: const_bps), f"const{int(const_bps)}"
     else:
-        policy, tag = OnnxPolicy(a.policy), os.path.splitext(os.path.basename(a.policy))[0]
+        if a.input_norm == "auto":
+            a.input_norm = "raw" if "schaferct" in os.path.basename(a.policy).lower() else "nv"
+        policy, tag = OnnxPolicy(a.policy, a.input_norm), os.path.splitext(os.path.basename(a.policy))[0]
     trace_path = f"{PROJECT}/docker_mnt/traffic_shell/trace_data/{a.trace}"
     n_trace = len(json.load(open(trace_path))["true_capacity"])
     n_steps = min(n_trace, a.max_steps) if a.max_steps else n_trace
@@ -203,7 +211,7 @@ def main():
     # the estimate made at step i is compared with the capacity seen at step i
     rec = {"policy": a.policy, "trace": a.trace, "delay_ms": a.delay,
            "queue_ms": a.queue_ms, "audio": not a.no_audio, "features": a.features,
-           "control": a.control, "keep_cwnd": a.keep_cwnd,
+           "control": a.control, "keep_cwnd": a.keep_cwnd, "input_norm": a.input_norm,
            "audio_interval_ms": a.audio_interval_ms,
            "pacing_factor": PACING_FACTOR, "observations": obs_log,
            "observations_rx": rx_log, "observations_tx": tx_log,
@@ -223,7 +231,10 @@ def main():
 
     shutil.copy(webrtc_log, os.path.join(out_dir, "pandia.log"))
     os.remove(webrtc_log)
-    generate_diagrams(out_dir, env.context, os.path.join(out_dir, "pandia.log"), cap / 1e6)
+    try:   # Pandia's plots; they fail on some runs (negative frame times, no decoded frame)
+        generate_diagrams(out_dir, env.context, os.path.join(out_dir, "pandia.log"), cap / 1e6)
+    except Exception as e:
+        summary["diagrams_error"] = repr(e)
     for name in ("freeze.txt", "score.txt"):
         p = os.path.join(out_dir, name)
         if os.path.exists(p):
