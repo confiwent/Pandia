@@ -9,10 +9,13 @@ Policy interface (same as metaband_seg/eval_rtc_models.py):
          taken from Pandia's sender-side array_bec() (--features sender);
          both are logged.
   out  = output[0, 0, 0], the bandwidth estimate in bps
-The estimate drives the public Pandia WebRTC through its own shm fields:
-  field 0 (encoder target bitrate) = estimate
-  field 1 (pacing rate)            = PACING_FACTOR * estimate (WebRTC default 2.5)
-`--policy gcc` writes 0 to both, i.e. WebRTC's GCC is in control.
+How the estimate reaches WebRTC (--control):
+  shm7  (default) field 7 = estimate in bps; our build (webrtc/metaband-shm7.patch)
+        uses it in place of GoogCC's target rate, so BitrateAllocator, encoder
+        and pacer (2.5x) work as with GoogCC
+  shm01 Pandia's own fields: 0 (encoder target) = estimate, 1 (pacing rate) =
+        PACING_FACTOR x estimate; this bypasses WebRTC's rate allocation
+`--policy gcc` writes 0 everywhere, i.e. WebRTC's GoogCC is in control.
 
 Network: trace replay with an RTCP bypass and a bottleneck queue of --queue-ms
 (default 1000 ms; per-call max queuing delay in the test set: median 240 ms,
@@ -101,11 +104,15 @@ def metrics(pred_bps, true_bps):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("trace")
-    ap.add_argument("--policy", required=True, help="path to .onnx, or 'gcc'")
+    ap.add_argument("--policy", required=True,
+                    help="path to .onnx, 'gcc', or 'const:<bps>' (fixed estimate, for tests)")
     ap.add_argument("--delay", type=float, default=20, help="one-way delay, ms")
     ap.add_argument("--max-steps", type=int, default=0, help="0 = whole trace")
     ap.add_argument("--min-bps", type=float, default=20e3)
     ap.add_argument("--features", choices=["receiver", "sender"], default="receiver")
+    ap.add_argument("--control", choices=["shm7", "shm01"], default="shm7")
+    ap.add_argument("--keep-cwnd", action="store_true",
+                    help="shm7: keep GoogCC's congestion window (PANDIA_EXT_KEEP_CWND)")
     ap.add_argument("--queue-ms", type=int, default=1000, help="bottleneck queue (tbf latency)")
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--audio-interval-ms", type=float, default=0,
@@ -115,6 +122,8 @@ def main():
         a.audio_interval_ms = trace_audio_interval_ms(
             f"{PROJECT}/docker_mnt/traffic_shell/trace_data/{a.trace}")
 
+    if a.keep_cwnd:
+        os.environ["PANDIA_EXT_KEEP_CWND"] = "1"
     pkt_sock = f"/tmp/{uuid.uuid4().hex[:8]}_pkt.sock"
     os.environ.update({"QUEUE_MS": str(a.queue_ms), "AUDIO": "0" if a.no_audio else "1",
                        "AUDIO_INTERVAL_MS": str(a.audio_interval_ms),
@@ -122,8 +131,13 @@ def main():
     rx = RxFeatures(pkt_sock)
 
     is_gcc = a.policy == "gcc"
-    policy = None if is_gcc else OnnxPolicy(a.policy)
-    tag = "gcc" if is_gcc else os.path.splitext(os.path.basename(a.policy))[0]
+    if is_gcc:
+        policy, tag = None, "gcc"
+    elif a.policy.startswith("const:"):
+        const_bps = float(a.policy.split(":", 1)[1])
+        policy, tag = (lambda obs: const_bps), f"const{int(const_bps)}"
+    else:
+        policy, tag = OnnxPolicy(a.policy), os.path.splitext(os.path.basename(a.policy))[0]
     trace_path = f"{PROJECT}/docker_mnt/traffic_shell/trace_data/{a.trace}"
     n_trace = len(json.load(open(trace_path))["true_capacity"])
     n_steps = min(n_trace, a.max_steps) if a.max_steps else n_trace
@@ -133,8 +147,9 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     config = ENV_CONFIG
-    # GCC: leave shm fields 0/1 at 0. Policy: drive bitrate + pacing rate.
-    config["action_keys"] = ["prediction_bandwidth"] if is_gcc else ["bitrate", "pacing_rate"]
+    # GCC: every shm field 0. Policy: field 7 (shm7) or fields 0/1 (shm01).
+    config["action_keys"] = (["prediction_bandwidth"] if is_gcc or a.control == "shm7"
+                             else ["bitrate", "pacing_rate"])
     config["action_limit"] = {}
     gs = config["gym_setting"]
     gs.update({"print_step": True, "print_period": 1.0, "duration": 1e6,
@@ -147,11 +162,15 @@ def main():
 
     action = Action(config["action_keys"])
     obs_log, rx_log, tx_log, pred_log, cap_log, ts_log, rr_log = [], [], [], [], [], [], []
-    est = 300e3
+    est = 300e3 if not a.policy.startswith("const:") else float(a.policy.split(":", 1)[1])
     try:
         env.reset()
         for i in range(n_steps):
-            if not is_gcc:
+            if is_gcc:
+                action.prediction_bandwidth = 0
+            elif a.control == "shm7":
+                action.prediction_bandwidth = est          # bps, written as is
+            else:
                 # Action.write() divides by K = 1024 to get "kbps"; compensate so
                 # WebRTC receives estimate / 1000 kbps.
                 action.bitrate = est * K / 1000
@@ -180,6 +199,7 @@ def main():
     # the estimate made at step i is compared with the capacity seen at step i
     rec = {"policy": a.policy, "trace": a.trace, "delay_ms": a.delay,
            "queue_ms": a.queue_ms, "audio": not a.no_audio, "features": a.features,
+           "control": a.control, "keep_cwnd": a.keep_cwnd,
            "audio_interval_ms": a.audio_interval_ms,
            "pacing_factor": PACING_FACTOR, "observations": obs_log,
            "observations_rx": rx_log, "observations_tx": tx_log,
@@ -191,6 +211,7 @@ def main():
     rr = np.asarray(rr_log)
     summary = {"policy": a.policy, "trace": a.trace, "steps": len(cap_log),
                "features": a.features, "queue_ms": a.queue_ms, "audio": not a.no_audio,
+               "control": a.control, "keep_cwnd": a.keep_cwnd,
                "audio_interval_ms": a.audio_interval_ms,
                "utilisation": float(np.nansum(rr) / np.nansum(cap)) if np.nansum(cap) else None}
     if not is_gcc:

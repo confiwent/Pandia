@@ -1,0 +1,144 @@
+From dbd2c46e513d76871df4535728814131201e5bce Mon Sep 17 00:00:00 2001
+From: nwkan036 <kanif@outlook.com>
+Date: Sat, 10 Oct 2026 19:05:21 +0800
+Subject: [PATCH] MetaBand: external bandwidth estimate in shm field 7 replaces
+ GoogCC target rate
+
+PostUpdates(): when shm[7] > 0 (bps) it becomes the target rate passed to
+the BitrateAllocator / encoder, the pacer runs at 2.5x the estimate, GoogCC
+probes are dropped and its congestion window is disabled unless
+PANDIA_EXT_KEEP_CWND is set. shm[7] = 0 keeps GoogCC. NVENC lib_dirs come
+from the gn arg nv_lib_dir instead of the original author's paths.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ call/rtp_transport_controller_send.cc | 54 ++++++++++++++++++++++++++-
+ call/rtp_transport_controller_send.h  |  5 +++
+ modules/video_coding/BUILD.gn         | 11 ++++--
+ 3 files changed, 64 insertions(+), 6 deletions(-)
+
+diff --git a/call/rtp_transport_controller_send.cc b/call/rtp_transport_controller_send.cc
+index e1fa340895..5121229512 100644
+--- a/call/rtp_transport_controller_send.cc
++++ b/call/rtp_transport_controller_send.cc
+@@ -9,6 +9,8 @@
+  */
+ #include "call/rtp_transport_controller_send.h"
+ 
++#include <cstdlib>
++
+ #include <memory>
+ #include <utility>
+ #include <vector>
+@@ -692,6 +694,54 @@ void RtpTransportControllerSend::UpdateStreamsConfig() {
+ }
+ 
+ void RtpTransportControllerSend::PostUpdates(NetworkControlUpdate update) {
++  // MetaBand: shm field 7 carries an external bandwidth estimate in bps
++  // (0 = none). It replaces the controller's (GoogCC's) target rate, so the
++  // rest of WebRTC runs exactly as with GoogCC: the BitrateAllocator and the
++  // encoder get the estimate as target rate and the pacer paces at
++  // kExtPacingFactor (WebRTC's default 2.5) times the estimate. GoogCC keeps
++  // running on the feedback, but its probes are dropped and its congestion
++  // window (computed from its own estimate) is disabled unless
++  // PANDIA_EXT_KEEP_CWND is set.
++  constexpr double kExtPacingFactor = 2.5;
++  static const bool keep_cwnd = getenv("PANDIA_EXT_KEEP_CWND") != nullptr;
++  if (update.target_rate)
++    last_controller_target_ = update.target_rate;
++  uint32_t ext_bwe_bps = 0;
++  if (shared_mem_ != nullptr && shared_mem_ != MAP_FAILED)
++    ext_bwe_bps = shared_mem_[7];
++  if (ext_bwe_bps > 0) {
++    const Timestamp now = Timestamp::Millis(clock_->TimeInMilliseconds());
++    const DataRate rate = DataRate::BitsPerSec(ext_bwe_bps);
++    TargetTransferRate target =
++        last_controller_target_.value_or(TargetTransferRate());
++    target.at_time = now;
++    target.target_rate = rate;
++    target.stable_target_rate = rate;
++    target.network_estimate.at_time = now;
++    target.network_estimate.bandwidth = rate;
++    target.cwnd_reduce_ratio = 0;
++    update.target_rate = target;
++    PacerConfig pacer_config;
++    pacer_config.at_time = now;
++    pacer_config.time_window = TimeDelta::Seconds(1);
++    pacer_config.data_window = rate * kExtPacingFactor * pacer_config.time_window;
++    pacer_config.pad_window = DataSize::Zero();
++    update.pacer_config = pacer_config;
++    update.probe_cluster_configs.clear();
++    if (!keep_cwnd) {
++      update.congestion_window.reset();
++      if (!congestion_window_size_.IsPlusInfinity()) {
++        congestion_window_size_ = DataSize::PlusInfinity();
++        UpdateCongestedState();
++      }
++    }
++    if (!ext_bwe_active_)
++      RTC_TS << "External bandwidth estimate active: " << rate.kbps() << " kbps";
++  } else if (ext_bwe_active_) {
++    RTC_TS << "External bandwidth estimate off, back to the network controller";
++  }
++  ext_bwe_active_ = ext_bwe_bps > 0;
++
+   bool drl_applied = false;
+   // Pandia: set pacing rate
+   if (shared_mem_ != nullptr && shared_mem_ != MAP_FAILED) {
+@@ -704,9 +754,9 @@ void RtpTransportControllerSend::PostUpdates(NetworkControlUpdate update) {
+   }
+ 
+   if (!drl_applied) {
+-    pacer_.BypassProbing(false);
++    pacer_.BypassProbing(ext_bwe_active_);
+   }
+-      
++
+   if (update.congestion_window) {
+     congestion_window_size_ = *update.congestion_window;
+     RTC_TS << "Update CWND: " << congestion_window_size_.bytes() << " bytes";
+diff --git a/call/rtp_transport_controller_send.h b/call/rtp_transport_controller_send.h
+index b1aed3fe5a..5ac757e515 100644
+--- a/call/rtp_transport_controller_send.h
++++ b/call/rtp_transport_controller_send.h
+@@ -220,6 +220,11 @@ class RtpTransportControllerSend final
+ 
+   const FieldTrialsView& field_trials_;
+   const uint32_t* shared_mem_ = nullptr;
++  // MetaBand: last target rate reported by the network controller (GoogCC),
++  // kept so that an external estimate (shm field 7) can reuse its RTT/loss.
++  absl::optional<TargetTransferRate> last_controller_target_
++      RTC_GUARDED_BY(task_queue_);
++  bool ext_bwe_active_ RTC_GUARDED_BY(task_queue_) = false;
+ };
+ 
+ }  // namespace webrtc
+diff --git a/modules/video_coding/BUILD.gn b/modules/video_coding/BUILD.gn
+index 4b7c38422a..9909dc6cff 100644
+--- a/modules/video_coding/BUILD.gn
++++ b/modules/video_coding/BUILD.gn
+@@ -1,3 +1,7 @@
++declare_args() {
++  nv_lib_dir = "/usr/lib/x86_64-linux-gnu"
++}
++
+ # Copyright (c) 2014 The WebRTC project authors. All Rights Reserved.
+ #
+ # Use of this source code is governed by a BSD-style license
+@@ -479,10 +483,9 @@ rtc_library("nvenc_h264") {
+ 
+   defines = []
+    
+-  lib_dirs = [
+-    "/usr/local/cuda-12.1/targets/x86_64-linux/lib/stubs",
+-    "/home/lix16/Workspace/webrtc/src/libs",
+-  ]
++  # Directory with libcuda.so / libnvcuvid.so / libnvidia-encode.so (driver
++  # libraries or stubs); set with gn arg nv_lib_dir.
++  lib_dirs = [ nv_lib_dir ]
+  
+   libs = [
+     "cuda",
+-- 
+2.50.1
+

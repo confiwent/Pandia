@@ -11,8 +11,10 @@ COPY rbwe/pandia /app/pandia
 COPY emulator/trace_replay.py emulator/sb3_client_local.py emulator/rx_capture.py emulator/audio_flow.py /app/
 COPY nvstub/libcuda.so.1 nvstub/libnvidia-encode.so.1 nvstub/libnvcuvid.so.1 /usr/local/lib/nvstub/
 ENV LD_LIBRARY_PATH=/usr/local/lib/nvstub
-# RBWE starts /app/simulation_video_save, which is not public; the public build
-# ignores shm field 7 (prediction_bandwidth), so this runs GCC.
-RUN chmod +x /app/simulation_Release && ln -sf /app/simulation_Release /app/simulation_video_save
+# RBWE starts /app/simulation_video_save (not public). Ours is simulation_shm7:
+# johnson-li/webrtc@pandia (bfc4443) + webrtc/metaband-shm7.patch, where shm
+# field 7 (prediction_bandwidth, bps) replaces GoogCC's target rate; 0 = GoogCC.
+# simulation_Release (public build, ignores field 7) stays for reference.
+RUN chmod +x /app/simulation_Release /app/simulation_shm7  && ln -sf /app/simulation_shm7 /app/simulation_video_save
 WORKDIR /app
 CMD ["python", "-um", "sb3_client_local"]

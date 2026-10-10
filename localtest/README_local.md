@@ -111,6 +111,31 @@ returns 502 on plain-HTTP mirrors).
   always fill it); with 300 / 600 ms the GCC runs on 07482 had their p99
   queuing delay cut at ~359 / 645 ms while the test set reaches 991 ms.
 
+## WebRTC with an external-estimate input (shm field 7)
+
+`webrtc/metaband-shm7.patch` on johnson-li/webrtc@pandia (bfc4443): in
+`RtpTransportControllerSend::PostUpdates()`, shm field 7 > 0 (bps) replaces
+GoogCC's target rate (kept: GoogCC's RTT/loss fields), so the BitrateAllocator,
+the encoder and the pacer (2.5x, WebRTC's default factor) work as with GoogCC;
+GoogCC probes are dropped and its congestion window is disabled
+(`PANDIA_EXT_KEEP_CWND=1` / `--keep-cwnd` keeps it). Field 7 = 0 is plain GoogCC.
+The NVENC `lib_dirs` became the gn arg `nv_lib_dir`.
+
+Build (s126, 40 cores, ~3 min; source = gclient checkout in `/data4t/knw/pandia/webrtc_pandia`):
+```bash
+cd src && git am metaband-shm7.patch
+buildtools/linux64/gn gen out/Release --args='is_debug=false rtc_use_h264=true ffmpeg_branding="Chrome" use_rtti=true rtc_use_x11=false treat_warnings_as_errors=false nv_lib_dir="<dir with libcuda.so, libnvcuvid.so, libnvidia-encode.so>"'
+ninja -C out/Release simulation          # ninja 1.11.1 from GitHub releases
+```
+`out/Release/simulation` -> `localtest/app/simulation_shm7` (md5 c3ad00d7…);
+the emulator image links `/app/simulation_video_save` to it.
+
+Check with `--policy const:600000` on 07488: "External bandwidth estimate
+active: 600 kbps" in pandia.log, pacing rate 1500 kbps, encoder target
+565–573 kbps (600 kbps minus transport overhead, as BitrateAllocator does
+with GoogCC). `run_policy.py --control shm7` is the default; `--control
+shm01` keeps the earlier encoder/pacer override.
+
 ## Closed-loop test subset
 
 `docker_mnt/traffic_shell/subset148.txt`: 148 of the 9405 emulated test calls,

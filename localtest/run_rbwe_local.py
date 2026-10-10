@@ -43,7 +43,7 @@ def start_container(self):
            f'--env LOGGING_PATH={self.logging_path} '
            f'--env SB3_LOGGING_PATH={self.sb3_logging_path} '
            f'--env CTRL_SOCKET_PATH={self.ctrl_socket_path} '
-           + ''.join(f'--env {k}={os.environ[k]} ' for k in ('QUEUE_MS', 'AUDIO', 'AUDIO_INTERVAL_MS', 'PKT_SOCKET_PATH')
+           + ''.join(f'--env {k}={os.environ[k]} ' for k in ('QUEUE_MS', 'AUDIO', 'AUDIO_INTERVAL_MS', 'PKT_SOCKET_PATH', 'PANDIA_EXT_KEEP_CWND')
                      if os.environ.get(k)) +
            f'{IMAGE} python -um {CLIENT}')
     print(cmd, flush=True)
