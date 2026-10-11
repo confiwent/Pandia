@@ -149,6 +149,30 @@ shm01` keeps the earlier encoder/pacer override.
   and drops intervals > 1 s, so long freezes are not counted.
 - decoded fps, encoded video bitrate, median encoded resolution, mean QP.
 
+## Real audio track and environment calibration (2026-10-11)
+
+- `webrtc/metaband-audio.patch` (on top of metaband-shm7): `simulation
+  --audio_wav <wav> --audio_ptime <ms>` adds an Opus audio track recorded from
+  the WAV file through a TestAudioDeviceModule. Audio negotiates abs-send-time
+  and transport-cc, so it registers with the BitrateAllocator and the
+  estimate covers audio + video (as in the MMSys'24 logs). Pandia had disabled
+  the voice engine (`CompositeMediaEngine::Init`), which made any audio receive
+  stream crash (null AudioState); it is started again when `PANDIA_AUDIO` is
+  set. Binary `simulation_shm7_audio` (md5 eac0c3c5…).
+  Check at 1 Mbps: ptime 20 -> 50 pkt/s, 119 B, 47.5 kbps; ptime 60 -> 16.8
+  pkt/s, 280 B, 37.6 kbps (test-set low-capacity calls: 260-305 B at 60 ms);
+  video encoder target 849-921 kbps (audio allocated first).
+- `run_policy.py --audio webrtc` (default; the frame length follows the
+  trace, Opus rounds 30 ms up to 40 ms), `--audio flow` = the old external
+  flow, `--audio none`. Audio source: Big Buck Bunny 60-90 s,
+  `docker_mnt/media/bbb_audio_48k.wav` (48 kHz mono).
+- Calibration by behaviour replay: `--policy replay` sends the test set's own
+  bandwidth_predictions step by step; `calib_compare.py <tag>` compares the
+  observations with the recorded ones. Knobs: `--frame-dropper` (keep
+  WebRTC's frame dropper, Pandia disables it), `--cap-scale` (shaping rate =
+  scale x true_capacity; the reported capacity stays the trace value),
+  `--queue-ms`, `--field-trials`.
+
 ## Closed-loop test subset
 
 `docker_mnt/traffic_shell/subset148.txt`: 148 of the 9405 emulated test calls,

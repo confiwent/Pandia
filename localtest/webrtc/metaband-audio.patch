@@ -1,0 +1,212 @@
+From 5dd014c3f4152ebe70d65b12e5c601deac64ab7f Mon Sep 17 00:00:00 2001
+From: nwkan036 <kanif@outlook.com>
+Date: Sun, 11 Oct 2026 11:18:41 +0800
+Subject: [PATCH] MetaBand: real Opus audio track in the headless simulation
+
+--audio_wav <file> adds an audio track recorded from the WAV file (looped)
+through a TestAudioDeviceModule (no sound card in the containers; the
+receiver plays out into a discarding renderer); --audio_ptime sets the Opus
+frame length via a=ptime in the answer. Audio negotiates abs-send-time and
+transport-cc, so it registers with the BitrateAllocator and the bandwidth
+estimate covers audio + video as in the MMSys'24 logs. Pandia had disabled
+the voice engine (CompositeMediaEngine::Init), leaving no AudioState and a
+crash in AudioReceiveStreamImpl; it is started again when PANDIA_AUDIO is set
+(main.cc sets it for --audio_wav). Without --audio_wav nothing changes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ examples/BUILD.gn                             |  2 ++
+ .../peerconnection_headless/simulation/base.h | 24 ++++++++++++++++-
+ .../simulation/flag_defs.h                    |  3 +++
+ .../simulation/main.cc                        |  4 +++
+ .../simulation/sender.cc                      | 26 +++++++++++++++++++
+ .../simulation/sender.h                       |  1 +
+ media/base/media_engine.cc                    |  9 ++++++-
+ 7 files changed, 67 insertions(+), 2 deletions(-)
+
+diff --git a/examples/BUILD.gn b/examples/BUILD.gn
+index a5877f2e49..8502bedfb3 100644
+--- a/examples/BUILD.gn
++++ b/examples/BUILD.gn
+@@ -860,6 +860,8 @@ if (is_linux || is_chromeos || is_win) {
+     ]
+     deps = [
+       "../api:audio_options_api",
++      "../api/task_queue:default_task_queue_factory",
++      "../modules/audio_device:audio_device_impl",
+       "../api:create_peerconnection_factory",
+       "../api:libjingle_peerconnection_api",
+       "../api:media_stream_interface",
+diff --git a/examples/peerconnection_headless/simulation/base.h b/examples/peerconnection_headless/simulation/base.h
+index 7fddf414bd..c455a32fcd 100644
+--- a/examples/peerconnection_headless/simulation/base.h
++++ b/examples/peerconnection_headless/simulation/base.h
+@@ -11,6 +11,13 @@
+ #include "api/video_codecs/builtin_video_encoder_factory.h"
+ #include "api/audio_codecs/builtin_audio_decoder_factory.h"
+ #include "api/audio_codecs/builtin_audio_encoder_factory.h"
++#include "api/task_queue/default_task_queue_factory.h"
++#include "modules/audio_device/include/test_audio_device.h"
++
++// MetaBand: audio track settings (set from the flags in main.cc). With an
++// empty g_audio_wav the program behaves as before (video only, default ADM).
++inline std::string g_audio_wav;
++inline int g_audio_ptime = 20;
+ 
+ const char kSessionDescriptionTypeName[] = "type";
+ const char kSessionDescriptionSdpName[] = "sdp";
+@@ -63,9 +70,22 @@ class SenderReceiverBase : public webrtc::PeerConnectionObserver,
+       signaling_thread_->AllowInvokesToThread(main_thread_.get());
+       signaling_thread_->Start();
+     }
++    // MetaBand: a TestAudioDeviceModule instead of the platform ADM (no sound
++    // card in the container): the sender records from g_audio_wav (looped),
++    // both sides play out into a discarding renderer at 48 kHz.
++    rtc::scoped_refptr<webrtc::AudioDeviceModule> adm;
++    if (!g_audio_wav.empty()) {
++      task_queue_factory_ = webrtc::CreateDefaultTaskQueueFactory();
++      auto capturer = is_sender()
++          ? webrtc::TestAudioDeviceModule::CreateWavFileReader(g_audio_wav, true)
++          : webrtc::TestAudioDeviceModule::CreatePulsedNoiseCapturer(0, 48000, 1);
++      adm = webrtc::TestAudioDeviceModule::Create(
++          task_queue_factory_.get(), std::move(capturer),
++          webrtc::TestAudioDeviceModule::CreateDiscardRenderer(48000, 1));
++    }
+     peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
+         nullptr /* network_thread */, nullptr /* worker_thread */,
+-        signaling_thread_.get(), nullptr /* default_adm */,
++        signaling_thread_.get(), adm /* default_adm */,
+         webrtc::CreateBuiltinAudioEncoderFactory(),
+         webrtc::CreateBuiltinAudioDecoderFactory(),
+         webrtc::CreateBuiltinVideoEncoderFactory(),
+@@ -85,6 +105,7 @@ class SenderReceiverBase : public webrtc::PeerConnectionObserver,
+ 
+   // Implement the PeerConnectionObserver interface.
+   virtual void add_tracks() {}
++  virtual bool is_sender() const { return false; }
+   void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) {
+     Json::Value jmessage;
+     jmessage[kCandidateSdpMidName] = candidate->sdp_mid();
+@@ -129,6 +150,7 @@ class SenderReceiverBase : public webrtc::PeerConnectionObserver,
+   rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface>
+       peer_connection_factory_;
+   std::unique_ptr<rtc::Thread> signaling_thread_;
++  std::unique_ptr<webrtc::TaskQueueFactory> task_queue_factory_;
+   std::unique_ptr<rtc::Thread> main_thread_;
+   SdpTransmissionObserver* remote_peer_;
+ };
+diff --git a/examples/peerconnection_headless/simulation/flag_defs.h b/examples/peerconnection_headless/simulation/flag_defs.h
+index bf6fe0d7e7..4076f30f43 100644
+--- a/examples/peerconnection_headless/simulation/flag_defs.h
++++ b/examples/peerconnection_headless/simulation/flag_defs.h
+@@ -22,6 +22,9 @@ ABSL_FLAG(std::string, logging_path, "", "The name of the logging file.");
+ ABSL_FLAG(std::string, shm_name, "pandia", "The name of the shared memory.");
+ ABSL_FLAG(int, resolution, 1080, "The capture height of the video frame.");
+ ABSL_FLAG(int, fps, 30, "The capture FPS of the video frame.");
++ABSL_FLAG(std::string, audio_wav, "",
++          "MetaBand: WAV file looped as the sender's audio track (Opus); empty = video only.");
++ABSL_FLAG(int, audio_ptime, 20, "MetaBand: Opus frame length in ms (a=ptime in the answer).");
+ ABSL_FLAG(std::string, force_fieldtrials,
+     "",
+     "Field trials control experimental features. This flag specifies the field "
+diff --git a/examples/peerconnection_headless/simulation/main.cc b/examples/peerconnection_headless/simulation/main.cc
+index 26740e5997..93418a38d0 100644
+--- a/examples/peerconnection_headless/simulation/main.cc
++++ b/examples/peerconnection_headless/simulation/main.cc
+@@ -78,6 +78,10 @@ int main(int argc, char* argv[]) {
+   const std::string logging_path = absl::GetFlag(FLAGS_logging_path);
+   const int resolution = absl::GetFlag(FLAGS_resolution);
+   const int fps = absl::GetFlag(FLAGS_fps);
++  g_audio_wav = absl::GetFlag(FLAGS_audio_wav);
++  g_audio_ptime = absl::GetFlag(FLAGS_audio_ptime);
++  if (!g_audio_wav.empty())
++    setenv("PANDIA_AUDIO", "1", 1);   // lets CompositeMediaEngine::Init start the voice engine
+ 
+   if (!logging_path.empty()) {
+     LOGGING_PATH = static_cast<char*>(malloc(logging_path.size() + 1));
+diff --git a/examples/peerconnection_headless/simulation/sender.cc b/examples/peerconnection_headless/simulation/sender.cc
+index a84cd9a603..53311f2d45 100644
+--- a/examples/peerconnection_headless/simulation/sender.cc
++++ b/examples/peerconnection_headless/simulation/sender.cc
+@@ -19,6 +19,30 @@ void Sender::add_tracks() {
+   peer_connection_->AddTransceiver(video_track_, init);
+   auto result_or_error =
+       peer_connection_->AddTrack(video_track_, {"stream_id"});
++  // MetaBand: a real audio track (Opus). Audio negotiates abs-send-time and
++  // transport-cc, so it registers with the BitrateAllocator and the bandwidth
++  // estimate is shared by audio (first, within WebRTC-Audio-Allocation) and video.
++  if (!g_audio_wav.empty()) {
++    auto audio_source =
++        peer_connection_factory_->CreateAudioSource(cricket::AudioOptions());
++    auto audio_track = peer_connection_factory_->CreateAudioTrack(
++        "audio_track", audio_source.get());
++    auto audio_result = peer_connection_->AddTrack(audio_track, {"stream_id"});
++    RTC_TS << "Audio track added from " << g_audio_wav << ", ptime "
++           << g_audio_ptime << " ms, ok: " << audio_result.ok();
++  }
++}
++
++
++// MetaBand: set the Opus frame length through a=ptime at the end of the audio section.
++static std::string SetAudioPtime(const std::string& sdp, int ptime) {
++  size_t m = sdp.find("m=audio");
++  if (m == std::string::npos) return sdp;
++  size_t end = sdp.find("\r\nm=", m);  // end of the audio section
++  size_t insert_at = end == std::string::npos ? sdp.size() : end + 2;
++  if (sdp.substr(m, insert_at - m).find("a=ptime:") != std::string::npos) return sdp;
++  return sdp.substr(0, insert_at) + "a=ptime:" + std::to_string(ptime) + "\r\n" +
++         sdp.substr(insert_at);
+ }
+ 
+ void Sender::connect_receiver() {
+@@ -59,6 +83,8 @@ void Sender::OnMessage(std::string &msg) {
+     webrtc::SdpType type = *type_maybe;
+     std::string sdp;
+     rtc::GetStringFromJsonObject(jmessage, kSessionDescriptionSdpName, &sdp);
++    if (!g_audio_wav.empty() && g_audio_ptime != 20)
++      sdp = SetAudioPtime(sdp, g_audio_ptime);
+     webrtc::SdpParseError error;
+     std::unique_ptr<webrtc::SessionDescriptionInterface> session_description =
+         webrtc::CreateSessionDescription(type, sdp, &error);
+diff --git a/examples/peerconnection_headless/simulation/sender.h b/examples/peerconnection_headless/simulation/sender.h
+index dbe72bb528..4648c94ba7 100644
+--- a/examples/peerconnection_headless/simulation/sender.h
++++ b/examples/peerconnection_headless/simulation/sender.h
+@@ -10,6 +10,7 @@ class Sender : public SenderReceiverBase,
+  public:
+   Sender(rtc::Thread *thread, std::string path, uint32_t width, uint32_t fps);
+   void add_tracks() override;
++  bool is_sender() const override { return true; }
+   void connect_receiver();
+   void OnSuccess(webrtc::SessionDescriptionInterface* desc) override;
+   void OnMessage(std::string &msg) override;
+diff --git a/media/base/media_engine.cc b/media/base/media_engine.cc
+index 8094152e97..90bd990ae1 100644
+--- a/media/base/media_engine.cc
++++ b/media/base/media_engine.cc
+@@ -10,6 +10,8 @@
+ 
+ #include "media/base/media_engine.h"
+ 
++#include <cstdlib>
++
+ #include <stddef.h>
+ 
+ #include <cstdint>
+@@ -169,7 +171,12 @@ CompositeMediaEngine::CompositeMediaEngine(
+ CompositeMediaEngine::~CompositeMediaEngine() = default;
+ 
+ bool CompositeMediaEngine::Init() {
+-  // voice().Init();
++  // Pandia disabled the voice engine (no ADM in the containers). MetaBand:
++  // initialise it when the simulation has an audio track (PANDIA_AUDIO set by
++  // examples/peerconnection_headless/simulation/main.cc for --audio_wav);
++  // without it there is no AudioState and audio receive streams crash.
++  if (getenv("PANDIA_AUDIO") != nullptr)
++    voice().Init();
+   return true;
+ }
+ 
+-- 
+2.50.1
+

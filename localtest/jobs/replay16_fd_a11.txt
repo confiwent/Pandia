@@ -1,0 +1,16 @@
+00068.json replay --frame-dropper --cap-scale 1.1
+02864.json replay --frame-dropper --cap-scale 1.1
+03955.json replay --frame-dropper --cap-scale 1.1
+07447.json replay --frame-dropper --cap-scale 1.1
+05757.json replay --frame-dropper --cap-scale 1.1
+00178.json replay --frame-dropper --cap-scale 1.1
+01602.json replay --frame-dropper --cap-scale 1.1
+08920.json replay --frame-dropper --cap-scale 1.1
+02667.json replay --frame-dropper --cap-scale 1.1
+04666.json replay --frame-dropper --cap-scale 1.1
+02364.json replay --frame-dropper --cap-scale 1.1
+05681.json replay --frame-dropper --cap-scale 1.1
+03484.json replay --frame-dropper --cap-scale 1.1
+08240.json replay --frame-dropper --cap-scale 1.1
+07365.json replay --frame-dropper --cap-scale 1.1
+04301.json replay --frame-dropper --cap-scale 1.1

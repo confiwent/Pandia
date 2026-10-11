@@ -15,6 +15,8 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/nvstub
 # johnson-li/webrtc@pandia (bfc4443) + webrtc/metaband-shm7.patch, where shm
 # field 7 (prediction_bandwidth, bps) replaces GoogCC's target rate; 0 = GoogCC.
 # simulation_Release (public build, ignores field 7) stays for reference.
-RUN chmod +x /app/simulation_Release /app/simulation_shm7  && ln -sf /app/simulation_shm7 /app/simulation_video_save
+# simulation_shm7_audio = shm7 + webrtc/metaband-audio.patch (real Opus audio
+# track with --audio_wav; identical to simulation_shm7 without it).
+RUN chmod +x /app/simulation_Release /app/simulation_shm7 /app/simulation_shm7_audio  && ln -sf /app/simulation_shm7_audio /app/simulation_video_save
 WORKDIR /app
 CMD ["python", "-um", "sb3_client_local"]

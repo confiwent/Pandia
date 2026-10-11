@@ -1,0 +1,8 @@
+07482.json gcc
+07482.json localtest/models/miql_3c27_79200.onnx
+07482.json localtest/models/sjtu-metaband.onnx
+07482.json localtest/models/Schaferct_model.onnx
+01294.json gcc
+01294.json localtest/models/miql_3c27_79200.onnx
+01294.json localtest/models/sjtu-metaband.onnx
+01294.json localtest/models/Schaferct_model.onnx

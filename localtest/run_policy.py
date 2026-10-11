@@ -110,7 +110,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("trace")
     ap.add_argument("--policy", required=True,
-                    help="path to .onnx, 'gcc', or 'const:<bps>' (fixed estimate, for tests)")
+                    help="path to .onnx, 'gcc', 'const:<bps>' (fixed estimate, for tests) or "
+                         "'replay' (the trace's own bandwidth_predictions, i.e. the "
+                         "test-set behaviour policy, step by step: environment calibration)")
     ap.add_argument("--delay", type=float, default=20, help="one-way delay, ms")
     ap.add_argument("--max-steps", type=int, default=0, help="0 = whole trace")
     ap.add_argument("--tag", default="", help="results_local/<tag>/<trace>/... (batch name)")
@@ -128,7 +130,15 @@ def main():
     ap.add_argument("--keep-cwnd", action="store_true",
                     help="shm7: keep GoogCC's congestion window (PANDIA_EXT_KEEP_CWND)")
     ap.add_argument("--queue-ms", type=int, default=1000, help="bottleneck queue (tbf latency)")
-    ap.add_argument("--no-audio", action="store_true")
+    ap.add_argument("--audio", choices=["webrtc", "flow", "none"], default="webrtc",
+                    help="webrtc: real Opus track inside WebRTC (shares the estimate); "
+                         "flow: external Opus-like flow (outside the estimate); none")
+    ap.add_argument("--no-audio", action="store_true", help="same as --audio none")
+    ap.add_argument("--frame-dropper", action="store_true",
+                    help="keep WebRTC's frame dropper (Pandia disables it)")
+    ap.add_argument("--field-trials", default="", help="extra WebRTC field trials")
+    ap.add_argument("--cap-scale", type=float, default=1.0,
+                    help="shaping rate = cap_scale x true_capacity (environment calibration)")
     ap.add_argument("--audio-interval-ms", type=float, default=0,
                     help="audio frame interval; 0 = from the trace's audio packet rate")
     a = ap.parse_args()
@@ -138,10 +148,18 @@ def main():
 
     if a.keep_cwnd:
         os.environ["PANDIA_EXT_KEEP_CWND"] = "1"
+    if a.frame_dropper:
+        os.environ["FRAME_DROPPER"] = "1"
+    os.environ["CAP_SCALE"] = str(a.cap_scale)
+    if a.field_trials:
+        os.environ["EXTRA_FIELD_TRIALS"] = a.field_trials
     job_id = uuid.uuid4().hex[:8]
     pkt_sock = f"/tmp/{job_id}_pkt.sock"
     webrtc_log = f"/tmp/{job_id}_pandia.log"      # per job: batches run in parallel
-    os.environ.update({"QUEUE_MS": str(a.queue_ms), "AUDIO": "0" if a.no_audio else "1",
+    if a.no_audio:
+        a.audio = "none"
+    os.environ.update({"QUEUE_MS": str(a.queue_ms),
+                       "AUDIO": {"webrtc": "webrtc", "flow": "1", "none": "0"}[a.audio],
                        "AUDIO_INTERVAL_MS": str(a.audio_interval_ms),
                        "PKT_SOCKET_PATH": pkt_sock})
     rx = RxFeatures(pkt_sock)
@@ -149,6 +167,15 @@ def main():
     is_gcc = a.policy == "gcc"
     if is_gcc:
         policy, tag = None, "gcc"
+    elif a.policy == "replay":
+        behaviour = np.asarray(json.load(open(
+            f"{PROJECT}/docker_mnt/traffic_shell/trace_data/{a.trace}"))["bandwidth_predictions"], float)
+        replay_step = [0]
+
+        def policy(obs):           # estimate for the next step
+            replay_step[0] += 1
+            return float(behaviour[min(replay_step[0], len(behaviour) - 1)])
+        tag = "replay"
     elif a.policy.startswith("const:"):
         const_bps = float(a.policy.split(":", 1)[1])
         policy, tag = (lambda obs: const_bps), f"const{int(const_bps)}"
@@ -181,7 +208,8 @@ def main():
     action = Action(config["action_keys"])
     obs_log, rx_log, tx_log, pred_log, cap_log, ts_log, rr_log = [], [], [], [], [], [], []
     applied_log = []     # what was written to WebRTC after F1/F2 (pred_log = raw model output)
-    est = 300e3 if not a.policy.startswith("const:") else float(a.policy.split(":", 1)[1])
+    est = (float(a.policy.split(":", 1)[1]) if a.policy.startswith("const:")
+           else float(behaviour[0]) if a.policy == "replay" else 300e3)
     try:
         env.reset()
         for i in range(n_steps):
@@ -225,8 +253,9 @@ def main():
 
     # the estimate made at step i is compared with the capacity seen at step i
     rec = {"policy": a.policy, "trace": a.trace, "delay_ms": a.delay,
-           "queue_ms": a.queue_ms, "audio": not a.no_audio, "features": a.features,
+           "queue_ms": a.queue_ms, "audio": a.audio, "features": a.features,
            "control": a.control, "keep_cwnd": a.keep_cwnd, "input_norm": a.input_norm,
+           "frame_dropper": a.frame_dropper, "field_trials": a.field_trials, "cap_scale": a.cap_scale,
            "audio_interval_ms": a.audio_interval_ms,
            "pacing_factor": PACING_FACTOR, "observations": obs_log,
            "observations_rx": rx_log, "observations_tx": tx_log,
@@ -238,7 +267,7 @@ def main():
     cap = np.asarray(cap_log)
     rr = np.asarray(rr_log)
     summary = {"policy": a.policy, "trace": a.trace, "steps": len(cap_log),
-               "features": a.features, "queue_ms": a.queue_ms, "audio": not a.no_audio,
+               "features": a.features, "queue_ms": a.queue_ms, "audio": a.audio,
                "control": a.control, "keep_cwnd": a.keep_cwnd,
                "audio_interval_ms": a.audio_interval_ms,
                "utilisation": float(np.nansum(rr) / np.nansum(cap)) if np.nansum(cap) else None}

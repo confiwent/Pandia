@@ -48,7 +48,7 @@ def _burst_bytes(kbit):
 
 class TraceReplayer(threading.Thread):
     def __init__(self, trace_path, obs_socket_path, delay_ms=20.0,
-                 step_s=0.06, queue_ms=300, log_path=None, min_kbit=10):
+                 step_s=0.06, queue_ms=300, log_path=None, min_kbit=10, cap_scale=1.0):
         super().__init__(daemon=True)
         with open(trace_path) as f:
             d = json.load(f)
@@ -60,6 +60,9 @@ class TraceReplayer(threading.Thread):
         self.step_s = step_s
         self.queue_ms = queue_ms
         self.min_kbit = min_kbit
+        # shaping rate = cap_scale x true_capacity (environment calibration);
+        # the capacity reported to the driver stays the trace's true_capacity
+        self.cap_scale = cap_scale
         self.log_path = log_path
         self.obs_socket_path = obs_socket_path
         self.stop_event = threading.Event()
@@ -119,7 +122,8 @@ class TraceReplayer(threading.Thread):
             wait = target - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
-            kbit = max(self.min_kbit, int(round(self.capacity_kbit[i])))
+            true_kbit = max(self.min_kbit, int(round(self.capacity_kbit[i])))
+            kbit = max(self.min_kbit, int(round(self.cap_scale * self.capacity_kbit[i])))
             loss = round(min(100.0, max(0.0, self.loss_pct[i])), 3)
             if i == 0:
                 self._setup(kbit, loss)
@@ -129,7 +133,7 @@ class TraceReplayer(threading.Thread):
                 if kbit != last_kbit:
                     self._tbf("change", kbit)
             applied = time.monotonic()
-            self._report(sock, kbit)
+            self._report(sock, true_kbit)
             if log:
                 log.write(f"{i},{target - t0:.4f},{applied - t0:.4f},{kbit},{loss}\n")
             last_kbit, last_loss = kbit, loss

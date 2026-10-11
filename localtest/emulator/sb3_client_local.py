@@ -8,8 +8,15 @@ delay, "loss" and "jitter" are ignored (loss comes from true_loss_rate).
 
 Container environment:
   QUEUE_MS         bottleneck queue (tbf latency), default 1000
-  AUDIO            1 (default) = run the Opus-like audio flow (audio_flow.py)
-  AUDIO_INTERVAL_MS  audio frame interval, default 20
+  AUDIO            webrtc (default) = real Opus audio track inside WebRTC
+                   (simulation --audio_wav, shares the bandwidth estimate with
+                   the video through the BitrateAllocator); 1 = the external
+                   Opus-like flow (audio_flow.py, outside the estimate); 0 = none
+  AUDIO_INTERVAL_MS  audio frame length, default 20 (Opus: 20/40/60)
+  AUDIO_WAV        audio source for AUDIO=webrtc, default /app/media/bbb_audio_48k.wav
+  FRAME_DROPPER    1 = keep WebRTC's frame dropper (Pandia disables it)
+  CAP_SCALE        shaping rate = CAP_SCALE x true_capacity (calibration), default 1
+  EXTRA_FIELD_TRIALS  appended to --force_fieldtrials
   PKT_SOCKET_PATH  if set, forward receiver-side RTP records there (rx_capture.py)
 """
 import os
@@ -29,18 +36,35 @@ class LocalClientProtocol(rbwe.ClientProtocol):
         log_path = f"{os.path.splitext(self.obs_socket_path)[0]}_replay.csv"
         print(f"Replay {trace}: delay {delay} ms, log {log_path}", flush=True)
         queue_ms = int(os.getenv("QUEUE_MS", "1000"))
+        cap_scale = float(os.getenv("CAP_SCALE", "1"))
         self.replayer = TraceReplayer(trace, self.obs_socket_path, delay_ms=float(delay),
-                                      queue_ms=queue_ms, log_path=log_path)
+                                      queue_ms=queue_ms, log_path=log_path, cap_scale=cap_scale)
+        print(f"capacity scale {cap_scale}", flush=True)
         self.replayer.start()
         time.sleep(0.2)   # qdisc in place before any traffic
         self.extra = []
         if os.getenv("PKT_SOCKET_PATH"):
             self.extra.append(RxCapture(os.environ["PKT_SOCKET_PATH"]))
-        if os.getenv("AUDIO", "1") == "1":
+        audio_mode = os.getenv("AUDIO", "webrtc")
+        if audio_mode == "1":
             self.extra.append(AudioFlow())
         for t in self.extra:
             t.start()
-        print(f"audio interval {os.getenv('AUDIO_INTERVAL_MS', '20')} ms, queue {queue_ms} ms, extra threads: {[type(t).__name__ for t in self.extra]}", flush=True)
+        ptime = int(round(float(os.getenv("AUDIO_INTERVAL_MS", "20"))))
+        print(f"audio {audio_mode}, frame {ptime} ms, queue {queue_ms} ms, extra threads: "
+              f"{[type(t).__name__ for t in self.extra]}", flush=True)
+        # Pandia disables WebRTC's frame dropper; FRAME_DROPPER=1 keeps it (WebRTC
+        # default: lower frame rate at low bitrates, as real clients do).
+        trials = "WebRTC-FlexFEC-03-Advertised/Enabled/WebRTC-FlexFEC-03/Enabled/"
+        if os.getenv("FRAME_DROPPER", "0") != "1":
+            trials += "WebRTC-FrameDropper/Disabled/"
+        trials += os.getenv("EXTRA_FIELD_TRIALS", "")
+        audio_args = []
+        if audio_mode == "webrtc":
+            audio_args = ["--audio_wav", os.getenv("AUDIO_WAV", "/app/media/bbb_audio_48k.wav"),
+                          "--audio_ptime", str(ptime)]
+            # Opus between 6 and 32 kbps (speech-like), allocated before the video
+            trials += "WebRTC-Audio-Allocation/min:6kbps,max:32kbps/"
 
         self.sb3_logging_path = "/app/media/sb3.log"
         log_file = open(self.sb3_logging_path, "w")
@@ -49,9 +73,9 @@ class LocalClientProtocol(rbwe.ClientProtocol):
              "--obs_socket", self.obs_socket_path,
              "--resolution", str(self.height), "--fps", str(self.fps),
              "--logging_path", self.logging_path,
-             "--force_fieldtrials=WebRTC-FlexFEC-03-Advertised/Enabled/WebRTC-FlexFEC-03/Enabled/WebRTC-FrameDropper/Disabled",
+             "--force_fieldtrials=" + trials,
              "--path", "/app/media",
-             "--dump_path", "/app/media/res_video"],
+             "--dump_path", "/app/media/res_video"] + audio_args,
             stdout=log_file, stderr=log_file, shell=False)
 
     def datagram_received(self, data: bytes, addr) -> None:
