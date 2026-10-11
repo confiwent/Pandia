@@ -117,6 +117,12 @@ def main():
     ap.add_argument("--min-bps", type=float, default=20e3)
     ap.add_argument("--features", choices=["receiver", "sender"], default="receiver")
     ap.add_argument("--control", choices=["shm7", "shm01"], default="shm7")
+    ap.add_argument("--alloc-audio", action="store_true",
+                    help="deployment fix F1: give WebRTC estimate - measured audio rate "
+                         "(the audio flow is outside WebRTC's BitrateAllocator)")
+    ap.add_argument("--guard", default="",
+                    help="deployment fix F2 'q_ms,factor': if the newest short-MI queuing "
+                         "delay > q_ms, cap the estimate at factor x long-MI receiving rate")
     ap.add_argument("--input-norm", choices=["auto", "nv", "raw"], default="auto",
                     help="auto: raw for Schaferct*, NORMAL_VECTOR otherwise")
     ap.add_argument("--keep-cwnd", action="store_true",
@@ -174,6 +180,7 @@ def main():
 
     action = Action(config["action_keys"])
     obs_log, rx_log, tx_log, pred_log, cap_log, ts_log, rr_log = [], [], [], [], [], [], []
+    applied_log = []     # what was written to WebRTC after F1/F2 (pred_log = raw model output)
     est = 300e3 if not a.policy.startswith("const:") else float(a.policy.split(":", 1)[1])
     try:
         env.reset()
@@ -202,6 +209,14 @@ def main():
             else:
                 est = max(a.min_bps, policy(obs_raw))
                 pred_log.append(est)
+                if a.guard:
+                    q_ms, factor = (float(v) for v in a.guard.split(","))
+                    if obs_raw[30] > q_ms:
+                        est = max(a.min_bps, min(est, factor * float(obs_raw[5])))
+                if a.alloc_audio:
+                    audio_bps = float(obs_raw[5] * obs_raw[135])     # long MI: rate x audio share
+                    est = max(a.min_bps, est - audio_bps)
+                applied_log.append(est)
     except KeyboardInterrupt:
         pass
     env.close()
@@ -215,6 +230,7 @@ def main():
            "audio_interval_ms": a.audio_interval_ms,
            "pacing_factor": PACING_FACTOR, "observations": obs_log,
            "observations_rx": rx_log, "observations_tx": tx_log,
+           "applied_estimate": applied_log, "alloc_audio": a.alloc_audio, "guard": a.guard,
            "bandwidth_predictions": pred_log, "true_capacity": cap_log,
            "t": ts_log, "tag": a.tag}
     with open(os.path.join(out_dir, a.trace), "w") as f:

@@ -1,0 +1,16 @@
+00068.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+02864.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+03955.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+07447.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+05757.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+00178.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+01602.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+08920.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+02667.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+04666.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+02364.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+05681.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+03484.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+08240.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+07365.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85
+04301.json localtest/models/sjtu-metaband.onnx --alloc-audio --guard 100,0.85

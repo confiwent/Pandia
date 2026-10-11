@@ -1,0 +1,16 @@
+00068.json localtest/models/sjtu-metaband.onnx --alloc-audio
+02864.json localtest/models/sjtu-metaband.onnx --alloc-audio
+03955.json localtest/models/sjtu-metaband.onnx --alloc-audio
+07447.json localtest/models/sjtu-metaband.onnx --alloc-audio
+05757.json localtest/models/sjtu-metaband.onnx --alloc-audio
+00178.json localtest/models/sjtu-metaband.onnx --alloc-audio
+01602.json localtest/models/sjtu-metaband.onnx --alloc-audio
+08920.json localtest/models/sjtu-metaband.onnx --alloc-audio
+02667.json localtest/models/sjtu-metaband.onnx --alloc-audio
+04666.json localtest/models/sjtu-metaband.onnx --alloc-audio
+02364.json localtest/models/sjtu-metaband.onnx --alloc-audio
+05681.json localtest/models/sjtu-metaband.onnx --alloc-audio
+03484.json localtest/models/sjtu-metaband.onnx --alloc-audio
+08240.json localtest/models/sjtu-metaband.onnx --alloc-audio
+07365.json localtest/models/sjtu-metaband.onnx --alloc-audio
+04301.json localtest/models/sjtu-metaband.onnx --alloc-audio
