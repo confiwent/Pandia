@@ -3,7 +3,7 @@ QoS of the same calls and policies under two closed-loop batches (e.g. the
 first environment `full148` vs the calibrated one `cal16`), median over calls
 per capacity bin.
 
-usage: python compare_envs.py <tagA> <tagB> [calls.txt]
+usage: python compare_envs.py <tag> [<tag> ...] [calls.txt]
 """
 import glob
 import json
@@ -36,11 +36,11 @@ def load(tag, calls):
 
 
 def main():
-    a, b = sys.argv[1], sys.argv[2]
+    args = sys.argv[1:]
     calls = None
-    if len(sys.argv) > 3:
-        calls = {l.strip() for l in open(sys.argv[3]) if l.strip()}
-    df = pd.concat([load(a, calls), load(b, calls)], ignore_index=True)
+    if args[-1].endswith(".txt"):
+        calls = {l.strip() for l in open(args.pop()) if l.strip()}
+    df = pd.concat([load(t, calls) for t in args], ignore_index=True)
     cap = df.groupby("call").capacity_mbps.first()
     df["bin"] = df.call.map(lambda c: "<0.3" if cap[c] < 0.3 else ("0.3-1" if cap[c] < 1 else ("1-3" if cap[c] < 3 else ">3")))
     pd.set_option("display.width", 250)

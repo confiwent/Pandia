@@ -122,9 +122,16 @@ def main():
     ap.add_argument("--alloc-audio", action="store_true",
                     help="deployment fix F1: give WebRTC estimate - measured audio rate "
                          "(the audio flow is outside WebRTC's BitrateAllocator)")
+    ap.add_argument("--smooth", default="",
+                    help="deployment fix F3 'a_up,a_down,max_up': asymmetric smoothing of the "
+                         "estimate against the value applied at the previous step (follow "
+                         "decreases with gain a_down, increases with gain a_up, and rise by at "
+                         "most max_up per 60 ms step)")
     ap.add_argument("--guard", default="",
-                    help="deployment fix F2 'q_ms,factor': if the newest short-MI queuing "
-                         "delay > q_ms, cap the estimate at factor x long-MI receiving rate")
+                    help="deployment fix F2 'q_ms,factor[,long]': if the queuing delay of the "
+                         "newest short MI (60 ms; with ',long' the newest long MI, 600 ms, i.e. "
+                         "a sustained queue) > q_ms, cap the estimate at factor x long-MI "
+                         "receiving rate")
     ap.add_argument("--input-norm", choices=["auto", "nv", "raw"], default="auto",
                     help="auto: raw for Schaferct*, NORMAL_VECTOR otherwise")
     ap.add_argument("--keep-cwnd", action="store_true",
@@ -235,11 +242,19 @@ def main():
             if is_gcc:
                 pred_log.append(float("nan"))
             else:
-                est = max(a.min_bps, policy(obs_raw))
-                pred_log.append(est)
+                raw = max(a.min_bps, policy(obs_raw))
+                pred_log.append(raw)
+                est = raw
+                if a.smooth and applied_log:
+                    a_up, a_down, max_up = (float(v) for v in a.smooth.split(","))
+                    prev = applied_log[-1]
+                    est = prev + (a_down if raw < prev else a_up) * (raw - prev)
+                    est = min(est, prev * (1 + max_up))
                 if a.guard:
-                    q_ms, factor = (float(v) for v in a.guard.split(","))
-                    if obs_raw[30] > q_ms:
+                    g = a.guard.split(",")
+                    q_ms, factor = float(g[0]), float(g[1])
+                    q_now = obs_raw[35] if len(g) > 2 and g[2] == "long" else obs_raw[30]
+                    if q_now > q_ms:
                         est = max(a.min_bps, min(est, factor * float(obs_raw[5])))
                 if a.alloc_audio:
                     audio_bps = float(obs_raw[5] * obs_raw[135])     # long MI: rate x audio share
@@ -260,6 +275,7 @@ def main():
            "pacing_factor": PACING_FACTOR, "observations": obs_log,
            "observations_rx": rx_log, "observations_tx": tx_log,
            "applied_estimate": applied_log, "alloc_audio": a.alloc_audio, "guard": a.guard,
+           "smooth": a.smooth,
            "bandwidth_predictions": pred_log, "true_capacity": cap_log,
            "t": ts_log, "tag": a.tag}
     with open(os.path.join(out_dir, a.trace), "w") as f:

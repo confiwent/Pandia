@@ -1,0 +1,16 @@
+00068.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+02864.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+03955.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+07447.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+05757.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+00178.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+01602.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+08920.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+02667.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+04666.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+02364.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+05681.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+03484.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+08240.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+07365.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
+04301.json localtest/models/sjtu-metaband.onnx --frame-dropper --cap-scale 1.1 --smooth 0.1,0.5,0.01
