@@ -19,6 +19,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+from qos_metrics import open_text
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FEAT = {"recv_rate_kbps": (5, 1e-3), "n_pkts_60ms": (10, 1), "bytes_per_pkt": (None, 1),
         "queue_ms": (30, 1), "delay_ms": (40, 1), "interarrival_ms": (80, 1), "jitter_ms": (90, 1),
@@ -39,7 +41,7 @@ def main(tag):
     rows = []
     for d in sorted(glob.glob(os.path.join(ROOT, "results_local", tag, "*", "replay_*"))):
         call = os.path.basename(os.path.dirname(d))
-        rec = json.load(open(os.path.join(d, f"{call}.json")))
+        rec = json.load(open_text(os.path.join(d, f"{call}.json")))
         on = np.asarray(rec["observations_rx"], float)
         ref = np.asarray(json.load(open(os.path.join(
             ROOT, "docker_mnt/traffic_shell/trace_data", f"{call}.json")))["observations"], float)

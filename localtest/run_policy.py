@@ -37,6 +37,7 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import time
 import uuid
 from datetime import datetime
@@ -116,6 +117,10 @@ def main():
     ap.add_argument("--delay", type=float, default=20, help="one-way delay, ms")
     ap.add_argument("--max-steps", type=int, default=0, help="0 = whole trace")
     ap.add_argument("--tag", default="", help="results_local/<tag>/<trace>/... (batch name)")
+    ap.add_argument("--plots", action="store_true",
+                    help="also write Pandia's ~30 PNG diagrams (off: they took 14 GB for 1.8k runs)")
+    ap.add_argument("--keep-raw", action="store_true",
+                    help="do not gzip pandia.log and <trace>.json after the QoS is computed")
     ap.add_argument("--min-bps", type=float, default=20e3)
     ap.add_argument("--features", choices=["receiver", "sender"], default="receiver")
     ap.add_argument("--control", choices=["shm7", "shm01"], default="shm7")
@@ -292,10 +297,11 @@ def main():
 
     shutil.copy(webrtc_log, os.path.join(out_dir, "pandia.log"))
     os.remove(webrtc_log)
-    try:   # Pandia's plots; they fail on some runs (negative frame times, no decoded frame)
-        generate_diagrams(out_dir, env.context, os.path.join(out_dir, "pandia.log"), cap / 1e6)
-    except Exception as e:
-        summary["diagrams_error"] = repr(e)
+    if a.plots:
+        try:   # Pandia's plots; they fail on some runs (negative frame times, no decoded frame)
+            generate_diagrams(out_dir, env.context, os.path.join(out_dir, "pandia.log"), cap / 1e6)
+        except Exception as e:
+            summary["diagrams_error"] = repr(e)
     for name in ("freeze.txt", "score.txt"):
         p = os.path.join(out_dir, name)
         if os.path.exists(p):
@@ -306,9 +312,19 @@ def main():
         summary["qos_error"] = repr(e)
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=1)
+    if not a.keep_raw and "qos" in summary:
+        from compress_results import compress
+        for name in ("pandia.log", a.trace):
+            path = os.path.join(out_dir, name)
+            if os.path.exists(path):
+                compress(path)
     print(json.dumps({k: v for k, v in summary.items() if not k.endswith(".txt")}, indent=1))
     print("results in", out_dir)
 
 
 if __name__ == "__main__":
     main()
+    # Leftover threads (observer socket, docker client) can keep the process
+    # alive after the results are written; a batch then waits forever.
+    sys.stdout.flush()
+    os._exit(0)

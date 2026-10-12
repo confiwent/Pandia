@@ -17,12 +17,20 @@ From the receiver-side observations saved per step (<trace>.json):
 
 usage: python qos_metrics.py <result_dir> [...]   (prints one row per run, writes qos.json)
 """
+import gzip
 import json
 import os
 import re
 import sys
 
 import numpy as np
+
+
+def open_text(path):
+    """Open `path` or, if only its gzipped copy exists, `path`.gz (text mode)."""
+    if os.path.exists(path):
+        return open(path, errors="ignore")
+    return gzip.open(path + ".gz", "rt", errors="ignore")
 
 RE = {
     "cap": re.compile(r"FrameCaptured, id: (\d+), width: \d+, height: (\d+), ts: \d+, utc ts: (\d+) ms"),
@@ -35,7 +43,7 @@ RE = {
 
 def parse_log(path):
     cap, enc, seq2fid, dec = {}, {}, {}, []
-    with open(path, errors="ignore") as f:
+    with open_text(path) as f:
         for line in f:
             if "FrameCaptured" in line:
                 m = RE["cap"].search(line)
@@ -75,8 +83,9 @@ def freezes(decoded_ms, window=30):
 
 def qos(result_dir):
     rec_path = [os.path.join(result_dir, f) for f in os.listdir(result_dir)
-                if f.endswith(".json") and f not in ("summary.json", "qos.json", "net_config.json")][0]
-    rec = json.load(open(rec_path))
+                if f.endswith((".json", ".json.gz"))
+                and f not in ("summary.json", "qos.json", "net_config.json")][0]
+    rec = json.load(open_text(rec_path[:-3] if rec_path.endswith(".gz") else rec_path))
     cap, enc, seq2fid, dec = parse_log(os.path.join(result_dir, "pandia.log"))
 
     # video frames
