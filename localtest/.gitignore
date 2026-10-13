@@ -8,3 +8,8 @@ nvstub/*.so.1
 models/*.onnx
 logs/
 logs_*.txt
+# closed-loop test results stay local (results_local/ and the tables built from it)
+*.csv
+*_summary.txt
+*_vs_*.txt
+all_algorithms_*

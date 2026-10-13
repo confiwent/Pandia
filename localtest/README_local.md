@@ -49,11 +49,6 @@ replaces `tc.sh` + `get_tbf_rate()`:
 
 `EMULATOR_CLIENT=sb3_client` switches back to RBWE's `tc.sh`.
 
-Check on 07482 (0.22–1.6 Mbps, no loss), GCC in control: receiving rate never
-above capacity, utilisation up to 0.94 in stable segments, queuing delay
-peaks ~300 ms at capacity drops, overall utilisation 48.7 % (GCC ramps up
-slowly after a drop), frame delay 52 ms, freeze rate (120 ms) 0.37 %.
-
 ## Closed-loop test of our own estimators (`run_policy.py`)
 
 ```bash
