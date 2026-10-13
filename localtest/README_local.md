@@ -188,3 +188,23 @@ GCC smoke test on 07482 (BBB + audio): audio / video share 0.43 / 0.57
 - `pandia.constants` has K = 1024: `test_single` divides the capacity (kbit) by 1024 but the prediction (bps) by 1024², a 1000/1024 mismatch (~2.4 %) in its ER/MSE.
 - No frames are dumped to `res_video/` with the public binary, so `cal_vmaf.sh` has nothing to score.
 - Video only, no audio track.
+
+## Environment C (2026-10-14): loss bursts and clock skew
+
+Calibration on 16 calls outside subset148 (`docker_mnt/traffic_shell/calib16.txt`,
+`calib_env_compare.py calibenv_C0 … calibenv_C4`, GCC and behaviour replay):
+- `--loss-burst auto`: Gilbert loss with a per-call mean burst taken from the
+  recorded "lost packets per loss event" over the independent-loss expectation
+  (about a third of the lossy test calls are bursty); lost per event 1.9 vs 1.9
+  recorded (independent loss: 1.3-1.4).
+- `--clock-drift auto`: the test calls ran between two machines and their
+  queuing-delay feature grows by ~0.1 ms/s while nothing queues (sender /
+  receiver clock skew, per-call Theil-Sen slope, median 93 ppm); the skew is
+  added to the receiver-side delay features (not to the network), the QoS uses
+  the skew-free `queue_true_ms`. Non-congested queuing delay median 4-10 ms
+  (recorded 8-22 ms, before 0.1-3.6 ms).
+- `--tbf-burst 1500,1`: one-MTU bucket (does not create the baseline queue by
+  itself; removes an overshoot tail above 3 Mbps). A 500 ms queue changed
+  little and raised the loss at 1-3 Mbps, so the queue stays at 1 s.
+Env C = `--frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto`
+(`jobs/full148envC.txt`).

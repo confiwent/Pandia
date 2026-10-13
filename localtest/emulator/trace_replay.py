@@ -11,6 +11,14 @@ Replaces RBWE's tc.sh + get_tbf_rate():
                 tc is only called when a value changes
   * the true capacity of every step is reported to the observer socket
     (msg type 4, {"rate": kbit}) instead of parsing `tc -s qdisc show`
+  * loss_burst > 1 replaces netem's independent loss by a Gilbert model
+    (`loss gemodel p r`, every packet lost in the bad state) with the same
+    mean loss = true_loss_rate and a mean burst of loss_burst packets; the
+    emulated test set has bursty loss (MMSys'24 challenge paper)
+  * burst_min / burst_ms set the tbf bucket (max of the two); the old
+    3000 B / 5 ms bucket passes a whole small video frame at line rate, so
+    a sender below capacity never queues, unlike the test set where calls
+    that do not overload still see 8-50 ms of queuing delay
 
 Qdisc layout on lo (sender, receiver and the audio flow all use lo):
 
@@ -40,15 +48,26 @@ def _tc(args):
         print("tc", " ".join(args), "->", r.stderr.decode().strip(), flush=True)
 
 
-def _burst_bytes(kbit):
+def _burst_bytes(kbit, burst_min=3000, burst_ms=5.0):
     # Small enough to keep shaping tight, large enough for one MTU and the
     # kernel timer granularity (rate / HZ) at high rates.
-    return int(max(3000, kbit * 1000 / 8 * 0.005))
+    return int(max(burst_min, kbit * 1000 / 8 * burst_ms / 1000))
+
+
+def _netem_loss_args(loss_pct, loss_burst):
+    """netem loss arguments for a mean loss of loss_pct %: independent loss,
+    or a Gilbert model with a mean burst of loss_burst packets."""
+    if loss_burst <= 1 or loss_pct <= 0 or loss_pct >= 99:
+        return ["loss", f"{loss_pct}%"]
+    r = 100.0 / loss_burst                          # P(bad -> good), %
+    p = min(100.0, r * loss_pct / (100.0 - loss_pct))   # P(good -> bad), %
+    return ["loss", "gemodel", f"{p:.4f}%", f"{r:.4f}%", "100%", "0%"]
 
 
 class TraceReplayer(threading.Thread):
     def __init__(self, trace_path, obs_socket_path, delay_ms=20.0,
-                 step_s=0.06, queue_ms=300, log_path=None, min_kbit=10, cap_scale=1.0):
+                 step_s=0.06, queue_ms=300, log_path=None, min_kbit=10, cap_scale=1.0,
+                 burst_min=3000, burst_ms=5.0, loss_burst=1.0):
         super().__init__(daemon=True)
         with open(trace_path) as f:
             d = json.load(f)
@@ -63,6 +82,7 @@ class TraceReplayer(threading.Thread):
         # shaping rate = cap_scale x true_capacity (environment calibration);
         # the capacity reported to the driver stays the trace's true_capacity
         self.cap_scale = cap_scale
+        self.burst_min, self.burst_ms, self.loss_burst = burst_min, burst_ms, loss_burst
         self.log_path = log_path
         self.obs_socket_path = obs_socket_path
         self.stop_event = threading.Event()
@@ -79,11 +99,11 @@ class TraceReplayer(threading.Thread):
 
     def _netem_media(self, verb, loss):
         _tc(["qdisc", verb, "dev", DEV, "parent", "1:2", "handle", "20:", "netem",
-             "delay", f"{self.delay_ms}ms", "loss", f"{loss}%"])
+             "delay", f"{self.delay_ms}ms"] + _netem_loss_args(loss, self.loss_burst))
 
     def _tbf(self, verb, kbit):
         _tc(["qdisc", verb, "dev", DEV, "parent", "20:1", "handle", "30:", "tbf",
-             "rate", f"{kbit}kbit", "burst", str(_burst_bytes(kbit)),
+             "rate", f"{kbit}kbit", "burst", str(_burst_bytes(kbit, self.burst_min, self.burst_ms)),
              "latency", f"{self.queue_ms}ms"])
 
     def _setup(self, kbit, loss):

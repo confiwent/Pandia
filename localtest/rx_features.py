@@ -50,8 +50,17 @@ SHORT, LONG = 0.06, 0.6
 
 
 class RxFeatures:
-    def __init__(self, sock_path):
+    def __init__(self, sock_path, drift_ppm=0.0):
+        """drift_ppm: receiver clock skew relative to the sender, added to every
+        one-way delay as drift_ppm * 1e-6 * (arrival - first arrival). The test
+        set's calls ran between two machines and their "queuing delay" grows by
+        ~0.1 ms/s while nothing queues (median ~93 ppm over subset148), which a
+        single-host emulator does not have. It changes the delay features only;
+        `true_queue` keeps the newest short-MI queuing delay without the skew."""
         self.sock_path = sock_path
+        self.drift = float(drift_ppm) * 1e-6
+        self.t0 = None
+        self.delay_true, self.min_true, self.true_queue = [], np.inf, 0.0
         if os.path.exists(sock_path):
             os.remove(sock_path)
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -92,14 +101,18 @@ class RxFeatures:
                 d -= AST_WRAP / (1 << 18) * 1000.0
             if self.base is None:
                 self.base = d
-            d = d - self.base + 200.0   # D
+                self.t0 = arrival
+            d_true = d - self.base + 200.0   # D
+            d = d_true + self.drift * (arrival - self.t0) * 1000.0
             self.min_seen = min(self.min_seen, d)
+            self.min_true = min(self.min_true, d_true)
         else:
-            d = np.nan
+            d = d_true = np.nan
         kind = 2 if flags & 1 else (1 if pt == AUDIO_PT else 0)
         self.t.append(arrival)
         self.size.append(size)
         self.delay.append(d)
+        self.delay_true.append(d_true)
         self.kind.append(kind)
         # loss from sequence gaps (extended 16-bit sequence numbers)
         h = self.highest.get(ssrc)
@@ -160,6 +173,11 @@ class RxFeatures:
                 if w[1] > 0 and w[5] != 0:
                     self.last_delay = w[3:8].copy()
                     break
+            i0, i1 = bisect.bisect_left(self.t, now - SHORT), bisect.bisect_left(self.t, now)
+            dt = np.asarray(self.delay_true[i0:i1], float)
+            dt = dt[~np.isnan(dt)]
+            if len(dt) and np.isfinite(self.min_true):
+                self.true_queue = float(dt.mean() - self.min_true)
         obs = np.zeros(150, dtype=np.float32)
         for fi in range(15):
             obs[10 * fi:10 * fi + 5] = [w[fi] for w in short]

@@ -98,6 +98,50 @@ def trace_audio_interval_ms(path):
     return float(min((20, 30, 40, 60), key=lambda iv: abs(60.0 / iv - per_mi)))
 
 
+DRIFT_MEDIAN_PPM = 93.0     # median over the subset148 calls with an estimate
+
+
+def trace_clock_drift_ppm(path):
+    """Sender/receiver clock skew of a test-set call: Theil-Sen slope of the
+    recorded short-MI queuing delay over time in MIs that do not congest (no
+    loss, short-MI rate < 70 % of capacity), in ppm (1 ppm = 1e-3 ms/s),
+    clipped to [0, 500]; the median of the subset when too few such MIs."""
+    d = json.load(open(path))
+    cap = np.asarray([np.nan if v is None else v for v in d["true_capacity"]], float)
+    o = np.asarray(d["observations"], dtype=float)
+    n = min(len(o), len(cap))
+    o, cap = o[:n], cap[:n]
+    ok = (o[:, 100] == 0) & (o[:, 0] < 0.7 * cap) & (o[:, 10] >= 2)
+    ok[:100] = False
+    idx = np.flatnonzero(ok)
+    if len(idx) < 150:
+        return DRIFT_MEDIAN_PPM
+    t, q = idx * 0.06, o[idx, 30]
+    rng = np.random.default_rng(0)
+    i, j = rng.integers(0, len(t), 4000), rng.integers(0, len(t), 4000)
+    m = np.abs(t[i] - t[j]) > 10
+    slope = np.median((q[i][m] - q[j][m]) / (t[i][m] - t[j][m]))   # ms per s
+    return float(np.clip(slope * 1000, 0, 500))
+
+
+def trace_loss_burst(path):
+    """Mean loss burst (packets) of a test-set call: the recorded "lost packets
+    per loss event" (obs[110]) of its lossy 60 ms MIs over what independent
+    loss at the call's mean true_loss_rate would give for the same packet
+    counts; below 1.3 the call is treated as independent loss (1)."""
+    d = json.load(open(path))
+    tl = np.asarray([np.nan if v is None else v for v in d.get("true_loss_rate", [0])], float)
+    q = np.nanmean(tl) / 100 if np.any(tl > 0) else 0.0
+    o = np.asarray(d["observations"], dtype=float)[80:]
+    m = o[:, 100] > 0
+    if q <= 0 or m.sum() < 20:
+        return 1.0
+    p = o[m, 100]
+    n = np.clip(np.round(o[m, 10] / np.maximum(1 - p, 1e-9)), 1, None)   # received + lost
+    ratio = o[m, 110].mean() / np.mean(n * q / (1 - (1 - q) ** n))
+    return float(np.clip(ratio, 1, 10)) if ratio >= 1.3 else 1.0
+
+
 def metrics(pred_bps, true_bps):
     p, t = np.asarray(pred_bps, float) / 1e6, np.asarray(true_bps, float) / 1e6
     ok = ~(np.isnan(p) | np.isnan(t) | (t <= 0))
@@ -153,16 +197,32 @@ def main():
                     help="shaping rate = cap_scale x true_capacity (environment calibration)")
     ap.add_argument("--audio-interval-ms", type=float, default=0,
                     help="audio frame interval; 0 = from the trace's audio packet rate")
+    ap.add_argument("--tbf-burst", default="3000,5",
+                    help="tbf bucket 'min_bytes,ms': max(min_bytes, ms of the rate)")
+    ap.add_argument("--clock-drift", default="0",
+                    help="receiver clock skew in ppm added to the delay features; "
+                         "auto = estimated from the trace's recorded queuing delay")
+    ap.add_argument("--loss-burst", default="1",
+                    help="mean loss burst in packets (Gilbert model); 1 = independent loss; "
+                         "auto = from the trace's recorded loss pattern")
     a = ap.parse_args()
     if not a.audio_interval_ms:
         a.audio_interval_ms = trace_audio_interval_ms(
             f"{PROJECT}/docker_mnt/traffic_shell/trace_data/{a.trace}")
+    a.loss_burst = (trace_loss_burst(f"{PROJECT}/docker_mnt/traffic_shell/trace_data/{a.trace}")
+                    if a.loss_burst == "auto" else float(a.loss_burst))
+    a.clock_drift = (trace_clock_drift_ppm(f"{PROJECT}/docker_mnt/traffic_shell/trace_data/{a.trace}")
+                     if a.clock_drift == "auto" else float(a.clock_drift))
+    print(f"loss burst {a.loss_burst:.2f} packets, clock drift {a.clock_drift:.0f} ppm", flush=True)
 
     if a.keep_cwnd:
         os.environ["PANDIA_EXT_KEEP_CWND"] = "1"
     if a.frame_dropper:
         os.environ["FRAME_DROPPER"] = "1"
     os.environ["CAP_SCALE"] = str(a.cap_scale)
+    burst_min, burst_ms = a.tbf_burst.split(",")
+    os.environ.update({"TBF_BURST_MIN": str(int(burst_min)), "TBF_BURST_MS": str(float(burst_ms)),
+                       "LOSS_BURST": str(a.loss_burst)})
     if a.field_trials:
         os.environ["EXTRA_FIELD_TRIALS"] = a.field_trials
     job_id = uuid.uuid4().hex[:8]
@@ -174,7 +234,7 @@ def main():
                        "AUDIO": {"webrtc": "webrtc", "flow": "1", "none": "0"}[a.audio],
                        "AUDIO_INTERVAL_MS": str(a.audio_interval_ms),
                        "PKT_SOCKET_PATH": pkt_sock})
-    rx = RxFeatures(pkt_sock)
+    rx = RxFeatures(pkt_sock, drift_ppm=a.clock_drift)
 
     is_gcc = a.policy == "gcc"
     if is_gcc:
@@ -219,6 +279,7 @@ def main():
 
     action = Action(config["action_keys"])
     obs_log, rx_log, tx_log, pred_log, cap_log, ts_log, rr_log = [], [], [], [], [], [], []
+    qtrue_log = []       # newest short-MI queuing delay without the clock skew (for the QoS)
     applied_log = []     # what was written to WebRTC after F1/F2 (pred_log = raw model output)
     est = (float(a.policy.split(":", 1)[1]) if a.policy.startswith("const:")
            else float(behaviour[0]) if a.policy == "replay" else 300e3)
@@ -242,6 +303,7 @@ def main():
             cap_log.append(env.obs_thread.cur_capacity * 1000.0)   # kbit -> bps
             obs_log.append(obs_raw.tolist())
             rx_log.append(obs_rx.tolist())
+            qtrue_log.append(rx.true_queue)
             tx_log.append(obs_tx.tolist())
             rr_log.append(float(obs_rx[5]))
             if is_gcc:
@@ -276,7 +338,8 @@ def main():
            "queue_ms": a.queue_ms, "audio": a.audio, "features": a.features,
            "control": a.control, "keep_cwnd": a.keep_cwnd, "input_norm": a.input_norm,
            "frame_dropper": a.frame_dropper, "field_trials": a.field_trials, "cap_scale": a.cap_scale,
-           "audio_interval_ms": a.audio_interval_ms,
+           "audio_interval_ms": a.audio_interval_ms, "tbf_burst": a.tbf_burst, "loss_burst": a.loss_burst,
+           "clock_drift_ppm": a.clock_drift, "queue_true_ms": qtrue_log,
            "pacing_factor": PACING_FACTOR, "observations": obs_log,
            "observations_rx": rx_log, "observations_tx": tx_log,
            "applied_estimate": applied_log, "alloc_audio": a.alloc_audio, "guard": a.guard,

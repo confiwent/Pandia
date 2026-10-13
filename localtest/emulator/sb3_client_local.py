@@ -16,6 +16,8 @@ Container environment:
   AUDIO_WAV        audio source for AUDIO=webrtc, default /app/media/bbb_audio_48k.wav
   FRAME_DROPPER    1 = keep WebRTC's frame dropper (Pandia disables it)
   CAP_SCALE        shaping rate = CAP_SCALE x true_capacity (calibration), default 1
+  TBF_BURST_MIN, TBF_BURST_MS  tbf bucket = max(MIN bytes, MS of the rate), default 3000 B / 5 ms
+  LOSS_BURST       mean loss burst in packets (Gilbert model), default 1 = independent loss
   EXTRA_FIELD_TRIALS  appended to --force_fieldtrials
   PKT_SOCKET_PATH  if set, forward receiver-side RTP records there (rx_capture.py)
 """
@@ -37,9 +39,14 @@ class LocalClientProtocol(rbwe.ClientProtocol):
         print(f"Replay {trace}: delay {delay} ms, log {log_path}", flush=True)
         queue_ms = int(os.getenv("QUEUE_MS", "1000"))
         cap_scale = float(os.getenv("CAP_SCALE", "1"))
+        burst_min = int(os.getenv("TBF_BURST_MIN", "3000"))
+        burst_ms = float(os.getenv("TBF_BURST_MS", "5"))
+        loss_burst = float(os.getenv("LOSS_BURST", "1"))
         self.replayer = TraceReplayer(trace, self.obs_socket_path, delay_ms=float(delay),
-                                      queue_ms=queue_ms, log_path=log_path, cap_scale=cap_scale)
-        print(f"capacity scale {cap_scale}", flush=True)
+                                      queue_ms=queue_ms, log_path=log_path, cap_scale=cap_scale,
+                                      burst_min=burst_min, burst_ms=burst_ms, loss_burst=loss_burst)
+        print(f"capacity scale {cap_scale}, tbf burst max({burst_min} B, {burst_ms} ms), "
+              f"loss burst {loss_burst} pkt", flush=True)
         self.replayer.start()
         time.sleep(0.2)   # qdisc in place before any traffic
         self.extra = []

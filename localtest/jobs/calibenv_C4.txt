@@ -1,0 +1,16 @@
+01557.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+04625.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+09045.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+01914.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+04645.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+01907.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+07080.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+05500.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+03639.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+02603.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+03907.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+07809.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+08806.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+06910.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+04993.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto
+00179.json replay --frame-dropper --cap-scale 1.1 --tbf-burst 1500,1 --loss-burst auto --clock-drift auto

@@ -106,9 +106,12 @@ def qos(result_dir):
     o = np.asarray(rec.get("observations_rx") or rec["observations"], float)
     cap_bps = np.asarray(rec["true_capacity"], float)
     skip = min(50, len(o) // 10)                      # start-up
+    # with an emulated clock skew (--clock-drift) the delay features carry it;
+    # the QoS uses the queuing delay without it
+    q_true = rec.get("queue_true_ms")
+    q = (np.asarray(q_true, float) if q_true and len(q_true) == len(o) else o[:, 30])[skip:]
     o, cap_bps = o[skip:], cap_bps[skip:]
     rate = o[:, 0]
-    q = o[:, 30]
     n, lost = o[:, 10], o[:, 110]
     delay_ms = float(rec.get("delay_ms", 20))
 
