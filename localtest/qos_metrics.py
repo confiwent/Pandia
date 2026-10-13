@@ -92,6 +92,8 @@ def qos(result_dir):
     dec = sorted(set(dec), key=lambda x: x[1])
     dec_ms = np.array([d[1] for d in dec], float)
     duration_s = (dec_ms[-1] - dec_ms[0]) / 1000 if len(dec_ms) > 1 else np.nan
+    if not duration_s > 0:      # (almost) nothing decoded: the whole call is frozen
+        duration_s = len(rec.get("observations_rx") or rec["observations"]) * 0.06
     e2e = np.array([d[1] - cap[seq2fid[d[0]]] for d in dec
                     if d[0] in seq2fid and seq2fid[d[0]] in cap], float)
     e2e = e2e[(e2e >= 0) & (e2e < 60000)]
@@ -126,7 +128,7 @@ def qos(result_dir):
         "e2e_delay_p95_ms": float(np.percentile(e2e, 95)) if len(e2e) else np.nan,
         "e2e_delay_std_ms": float(e2e.std()) if len(e2e) else np.nan,
         "freeze_count": n_frz,
-        "freeze_ratio_pct": float(100 * frz_ms / 1000 / duration_s) if duration_s else np.nan,
+        "freeze_ratio_pct": float(100 * frz_ms / 1000 / duration_s) if len(dec_ms) > 1 else 100.0,
         "video_bitrate_mbps": float(enc_bits / duration_s / 1e6) if duration_s else np.nan,
         "res_median_p": float(np.median(heights)) if len(heights) else np.nan,
         "qp_mean": float(np.mean([e["qp"] for e in enc_ok if "qp" in e])) if enc_ok else np.nan,

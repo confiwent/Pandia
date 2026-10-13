@@ -60,7 +60,8 @@ def norm(df, col, sign):
     g = df.groupby("call")[col]
     lo, hi = g.transform("min"), g.transform("max")
     s = (df[col] - lo) / (hi - lo).replace(0, np.nan)
-    return (s if sign > 0 else 1 - s).fillna(1.0)
+    s = (s if sign > 0 else 1 - s).fillna(1.0)          # all algorithms equal on this call
+    return s.where(df[col].notna(), 0.0)                 # missing metric counts as the worst
 
 
 def table(parts):
