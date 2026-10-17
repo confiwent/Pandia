@@ -1,0 +1,120 @@
+From 8153015f1954eebca435db6674605dec55a00b8d Mon Sep 17 00:00:00 2001
+From: nwkan036 <kanif@outlook.com>
+Date: Sat, 17 Oct 2026 10:13:55 +0800
+Subject: [PATCH] MetaBand: PANDIA_EXT_MODE=goog applies the shm field-7
+ estimate inside GoogCC (RBWE integration)
+
+GoogCcNetworkController::MaybeTriggerOnNetworkChanged() replaces the
+loss-based target with shm[7] (bps, 0 = none) before the congestion-window
+pushback, so the pacing, probing and pushback of GoogCC stay unchanged, as
+described by the RBWE authors; RtpTransportControllerSend::PostUpdates() then
+leaves the target alone. Without PANDIA_EXT_MODE the binary behaves as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ call/rtp_transport_controller_send.cc         |  9 +++-
+ .../goog_cc/goog_cc_network_control.cc        | 46 +++++++++++++++++++
+ 2 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/call/rtp_transport_controller_send.cc b/call/rtp_transport_controller_send.cc
+index 5121229512..589c8e6cab 100644
+--- a/call/rtp_transport_controller_send.cc
++++ b/call/rtp_transport_controller_send.cc
+@@ -10,6 +10,7 @@
+ #include "call/rtp_transport_controller_send.h"
+ 
+ #include <cstdlib>
++#include <string>
+ 
+ #include <memory>
+ #include <utility>
+@@ -706,8 +707,14 @@ void RtpTransportControllerSend::PostUpdates(NetworkControlUpdate update) {
+   static const bool keep_cwnd = getenv("PANDIA_EXT_KEEP_CWND") != nullptr;
+   if (update.target_rate)
+     last_controller_target_ = update.target_rate;
++  // PANDIA_EXT_MODE=goog: the estimate is applied inside GoogCC instead
++  // (goog_cc_network_control.cc), so it is not replaced here.
++  static const bool ext_in_goog = [] {
++    const char* m = getenv("PANDIA_EXT_MODE");
++    return m != nullptr && std::string(m) == "goog";
++  }();
+   uint32_t ext_bwe_bps = 0;
+-  if (shared_mem_ != nullptr && shared_mem_ != MAP_FAILED)
++  if (!ext_in_goog && shared_mem_ != nullptr && shared_mem_ != MAP_FAILED)
+     ext_bwe_bps = shared_mem_[7];
+   if (ext_bwe_bps > 0) {
+     const Timestamp now = Timestamp::Millis(clock_->TimeInMilliseconds());
+diff --git a/modules/congestion_controller/goog_cc/goog_cc_network_control.cc b/modules/congestion_controller/goog_cc/goog_cc_network_control.cc
+index c160633e4e..b0b0347d7d 100644
+--- a/modules/congestion_controller/goog_cc/goog_cc_network_control.cc
++++ b/modules/congestion_controller/goog_cc/goog_cc_network_control.cc
+@@ -12,6 +12,12 @@
+ 
+ #include <inttypes.h>
+ #include <stdio.h>
++#include <fcntl.h>
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include <cstdlib>
+ 
+ #include <algorithm>
+ #include <cstdint>
+@@ -33,6 +39,41 @@
+ #include "rtc_base/logging.h"
+ #include "system_wrappers/include/clock.h"
+ 
++
++namespace {
++// MetaBand: with PANDIA_EXT_MODE=goog the external estimate of shm field 7 is
++// applied inside GoogCC, where RBWE (GLOBECOM 2025) applies it: it replaces
++// the loss-based target before the congestion-window pushback, and the
++// pacing, probing and pushback logic of GoogCC stay unchanged.
++bool ExtEstimateInGoogCc() {
++  static const bool on = [] {
++    const char* m = getenv("PANDIA_EXT_MODE");
++    return m != nullptr && std::string(m) == "goog";
++  }();
++  return on;
++}
++
++const uint32_t* PandiaSharedMemory() {
++  static const uint32_t* shm = []() -> const uint32_t* {
++    if (!SHM_STR)
++      return nullptr;
++    int fd = shm_open(SHM_STR, O_RDONLY, 0666);
++    if (fd == -1)
++      return nullptr;
++    const uint32_t* p = nullptr;
++    struct stat st;
++    if (fstat(fd, &st) == 0) {
++      void* m = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
++      if (m != MAP_FAILED)
++        p = static_cast<const uint32_t*>(m);
++    }
++    close(fd);
++    return p;
++  }();
++  return shm;
++}
++}  // namespace
++
+ namespace webrtc {
+ 
+ namespace {
+@@ -647,6 +688,11 @@ void GoogCcNetworkController::MaybeTriggerOnNetworkChanged(
+   uint8_t fraction_loss = bandwidth_estimation_->fraction_loss();
+   TimeDelta round_trip_time = bandwidth_estimation_->round_trip_time();
+   DataRate loss_based_target_rate = bandwidth_estimation_->target_rate();
++  if (ExtEstimateInGoogCc()) {
++    const uint32_t* shm = PandiaSharedMemory();
++    if (shm != nullptr && shm[7] > 0)
++      loss_based_target_rate = DataRate::BitsPerSec(shm[7]);
++  }
+   DataRate pushback_target_rate = loss_based_target_rate;
+ 
+   BWE_TEST_LOGGING_PLOT(1, "fraction_loss_%", at_time.ms(),
+-- 
+2.50.1
+

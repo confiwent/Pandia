@@ -13,3 +13,5 @@ logs_*.txt
 *_summary.txt
 *_vs_*.txt
 all_algorithms_*
+stats_local/
+models/

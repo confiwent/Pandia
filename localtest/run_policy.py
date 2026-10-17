@@ -81,11 +81,83 @@ class OnnxPolicy:
                 shape = [1 if (not isinstance(d, int) or d <= 0) else d for d in inp.shape]
                 self.extras[inp.name] = np.zeros(shape, dtype=np.float32)
         self.nv = normal_vector() if input_norm == "nv" else np.ones(150, dtype=np.float32)
+        # the MMSys'24 challenge baselines with recurrent states (Pioneer, FARC,
+        # NAORL, IQL-emu) carry them over, as in their evaluation scripts; NAORL
+        # also min-max scales the input and maps its output from [-1, 1]
+        self.carry = len(self.sess.get_outputs()) == 1 + len(self.extras)
+        self.naorl = "naorl" in os.path.basename(path).lower()
+        if self.naorl:
+            mm = np.load(os.path.join(os.path.dirname(path), "naorl_minmax.npz"))
+            self.mm_lo, self.mm_hi = mm["obs_min"], mm["obs_max"]
 
     def __call__(self, obs_raw):
-        feed = {"obs": (obs_raw * self.nv).astype(np.float32).reshape(1, 1, -1)}
+        if self.naorl:
+            x = np.clip((obs_raw - self.mm_lo) / (self.mm_hi - self.mm_lo + 1e-3) * 2.0 - 1.0, -1.0, 1.0)
+        else:
+            x = obs_raw * self.nv
+        feed = {"obs": x.astype(np.float32).reshape(1, 1, -1)}
         feed.update(self.extras)
-        return float(self.sess.run(None, feed)[0][0, 0, 0])
+        out = self.sess.run(None, feed)
+        if self.carry:
+            for name, o in zip(self.extras, out[1:]):
+                self.extras[name] = np.asarray(o, dtype=np.float32).reshape(self.extras[name].shape)
+        v = float(np.asarray(out[0]).reshape(-1)[0])
+        if self.naorl:
+            v = (v + 1.0) / 2.0 * (8e6 - 5e3) + 5e3
+        return v
+
+
+class RbwePolicy:
+    """RBWE (Kai et al., GLOBECOM 2025): the GMM actor and Q-ensemble of
+    RBWE_offline/code/riql6_ensemble.py, deployed as in the paper: the mode a*
+    of the mixture (L-BFGS-B) and its local std sigma*, the lower confidence
+    bound a = a* - delta sigma* (delta = 0.5), estimate = obs[5] exp(a), and a
+    fallback to GCC (0 written to field 7 = GoogCC) when the relative std of the
+    Q-ensemble at a exceeds tau_u = 0.4. Raw observations (RBWE normalises inside).
+    spec: <actor .pt | .onnx>[,<all_checkpoint .pt>]; without the Q-ensemble
+    there is no fallback."""
+    fallback_zero = True
+
+    def __init__(self, spec, delta=0.5, tau_u=0.4):
+        import torch
+        from pandia.agent import q_network as Q
+        parts = spec.split(",")
+        self.torch, self.delta, self.tau_u = torch, delta, tau_u
+        self.onnx = parts[0].endswith(".onnx")
+        if self.onnx:
+            self.sess = ort.InferenceSession(parts[0], providers=["CPUExecutionProvider"])
+        else:
+            self.actor = Q.gmm_policy(parts[0])
+        self.q = Q.q_network(parts[1]) if len(parts) > 1 else None
+        self.q_ensemble = Q.q_ensemble
+        self.n = self.n_fallback = 0
+
+    def _mixture(self, obs_raw):
+        x = obs_raw.astype(np.float32).reshape(1, 1, -1)
+        if self.onnx:
+            z = np.zeros((1, 1), dtype=np.float32)
+            mean, std, pi = self.sess.run(None, {"obs": x, "hidden_states": z, "cell_states": z})[:3]
+        else:
+            with self.torch.no_grad():
+                (mean, std, pi), _, _ = self.actor(self.torch.from_numpy(x), None, None)
+            mean, std, pi = mean.numpy(), std.numpy(), pi.numpy()
+        return np.squeeze(pi), np.squeeze(mean), np.squeeze(std)
+
+    def __call__(self, obs_raw):
+        self.n += 1
+        pi, mu, sigma = self._mixture(obs_raw)
+        a_star, s_star = E.find_mode_and_uncertainty(pi, mu, sigma, tol=1e-3, epsilon=1e-3)
+        if a_star is False or not np.isfinite(s_star):
+            k = int(np.argmax(pi))
+            a_star, s_star = float(mu[k]), float(sigma[k])
+        act = float(a_star) - self.delta * float(s_star)
+        if self.q is not None:
+            with self.torch.no_grad():
+                m, s = self.q_ensemble(self.q, obs_raw.astype(np.float32), [act])
+            if s / max(abs(m), 1e-3) > self.tau_u:
+                self.n_fallback += 1
+                return 0.0
+        return float(obs_raw[5]) * float(np.exp(act))
 
 
 def trace_audio_interval_ms(path):
@@ -199,6 +271,10 @@ def main():
                     help="audio frame interval; 0 = from the trace's audio packet rate")
     ap.add_argument("--tbf-burst", default="3000,5",
                     help="tbf bucket 'min_bytes,ms': max(min_bytes, ms of the rate)")
+    ap.add_argument("--ext-mode", choices=["post", "goog"], default="post",
+                    help="where WebRTC applies the shm field-7 estimate: post = replaces the target "
+                         "in RtpTransportControllerSend (pacer 2.5x, no probes, no cwnd); goog = inside "
+                         "GoogCC before the cwnd pushback, GoogCC pacing/probing kept (RBWE)")
     ap.add_argument("--clock-drift", default="0",
                     help="receiver clock skew in ppm added to the delay features; "
                          "auto = estimated from the trace's recorded queuing delay")
@@ -217,6 +293,8 @@ def main():
 
     if a.keep_cwnd:
         os.environ["PANDIA_EXT_KEEP_CWND"] = "1"
+    if a.ext_mode == "goog":
+        os.environ["PANDIA_EXT_MODE"] = "goog"
     if a.frame_dropper:
         os.environ["FRAME_DROPPER"] = "1"
     os.environ["CAP_SCALE"] = str(a.cap_scale)
@@ -251,9 +329,14 @@ def main():
     elif a.policy.startswith("const:"):
         const_bps = float(a.policy.split(":", 1)[1])
         policy, tag = (lambda obs: const_bps), f"const{int(const_bps)}"
+    elif a.policy.startswith("rbwe:"):
+        policy = RbwePolicy(a.policy.split(":", 1)[1])
+        tag = "rbwe_" + os.path.splitext(os.path.basename(a.policy.split(":", 1)[1].split(",")[0]))[0]
     else:
         if a.input_norm == "auto":
-            a.input_norm = "raw" if "schaferct" in os.path.basename(a.policy).lower() else "nv"
+            base = os.path.basename(a.policy).lower()
+            # models that take raw observations (they normalise inside or have their own scaling)
+            a.input_norm = "raw" if any(k in base for k in ("schaferct", "pioneer", "farc", "naorl", "iqlemu")) else "nv"
         policy, tag = OnnxPolicy(a.policy, a.input_norm), os.path.splitext(os.path.basename(a.policy))[0]
     trace_path = f"{PROJECT}/docker_mnt/traffic_shell/trace_data/{a.trace}"
     n_trace = len(json.load(open(trace_path))["true_capacity"])
@@ -309,7 +392,9 @@ def main():
             if is_gcc:
                 pred_log.append(float("nan"))
             else:
-                raw = max(a.min_bps, policy(obs_raw))
+                out = policy(obs_raw)
+                # 0 from a policy with a GCC fallback (RBWE) = hand the step to GoogCC
+                raw = 0.0 if (out == 0.0 and getattr(policy, "fallback_zero", False)) else max(a.min_bps, out)
                 pred_log.append(raw)
                 est = raw
                 if a.smooth and applied_log:
@@ -339,7 +424,7 @@ def main():
            "control": a.control, "keep_cwnd": a.keep_cwnd, "input_norm": a.input_norm,
            "frame_dropper": a.frame_dropper, "field_trials": a.field_trials, "cap_scale": a.cap_scale,
            "audio_interval_ms": a.audio_interval_ms, "tbf_burst": a.tbf_burst, "loss_burst": a.loss_burst,
-           "clock_drift_ppm": a.clock_drift, "queue_true_ms": qtrue_log,
+           "clock_drift_ppm": a.clock_drift, "queue_true_ms": qtrue_log, "ext_mode": a.ext_mode, "fallback_share": (getattr(policy, "n_fallback", 0) / max(1, getattr(policy, "n", 1))) if policy is not None else None,
            "pacing_factor": PACING_FACTOR, "observations": obs_log,
            "observations_rx": rx_log, "observations_tx": tx_log,
            "applied_estimate": applied_log, "alloc_audio": a.alloc_audio, "guard": a.guard,

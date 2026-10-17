@@ -21,7 +21,15 @@ import pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAMES = {"gcc": "GCC", "sjtu-metaband": "MetaBand(paper)", "miql_3c27_79200": "MetaBand(x3-s1)",
-         "Schaferct_model": "Schaferct"}
+         "Schaferct_model": "Schaferct",
+         # x3-s1 recipe retrained with the closed-loop fixes (s126, 2026-10-14)
+         "clA_17400": "x3+pen(A)", "clB_70600": "x3+pen+rel(B)", "clB_51000": "x3+pen+rel(B51k)",
+         "clC_78000": "x3+pen+rel+g96(C)", "clC_58400": "x3+pen+rel+g96(C58k)",
+         "clBs0_45600": "B s0 45.6k", "clBs0_55000": "B s0 55k", "clBs0_71000": "B s0 71k", "clBs0_59200": "B s0 59.2k", "clBs0_23800": "B s0 23.8k", "clD_36000": "D 36k", "clD_30200": "D 30.2k",
+         "clE_39200": "E 39.2k", "clE_18400": "E 18.4k", "clP_46600": "pooled+fix 46.6k", "clP_70400": "pooled+fix 70.4k",
+         "clS_18000": "stepclus+fix 18k", "clS_42200": "stepclus+fix 42.2k", "clR_53400": "rel-only 53.4k", "clR_46600": "rel-only 46.6k",
+         "rbwe_rbwe_gmm4_released": "RBWE (released)", "Pioneer": "Pioneer", "NAORL": "NAORL", "FARC": "FARC", "IQLemu": "IQL-emu",
+         }
 
 # table -> [(tag, policy filter or None, suffix)], calls restricted to the first tag's calls
 TABLES = [
@@ -29,6 +37,12 @@ TABLES = [
      [("full148", None, "")]),
     ("Env B (calibrated): WebRTC Opus audio, frame dropper on, capacity x1.1 - 148 calls",
      [("full148cal", None, ""), ("full148cal_SG", None, "+SG")]),
+    ("Env C (Env B + bursty loss + clock skew, tbf 1 MTU) - 148 calls",
+     [("full148envC", None, "")]),
+    ("Env C selection (calib16, outside subset148): retrained x3-s1 variants",
+     [("pickC16", None, "")]),
+    ("Env C, RBWE integration (field 7 inside GoogCC, --ext-mode goog), calib16",
+     [("modeC16_goog", None, ""), ("pickC16", {"GCC"}, "")]),
     ("Env B pilot (16 calls): safety-layer variants of MetaBand(paper)",
      [("cal16", None, ""), ("cal16_S", None, "+S"), ("cal16_G", None, "+G"),
       ("cal16_SG", None, "+SG"), ("cal16_SG2", None, "+SG2")]),
@@ -89,6 +103,8 @@ def main():
     pd.set_option("display.precision", 3)
     text, per_call = [], []
     for title, parts in TABLES:
+        if load(*parts[0]).empty:          # batch not run yet
+            continue
         t, df = table(parts)
         text.append(f"### {title}\n{t.to_string()}\n")
         per_call.append(df.assign(table=title))

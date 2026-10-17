@@ -17,6 +17,8 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/nvstub
 # simulation_Release (public build, ignores field 7) stays for reference.
 # simulation_shm7_audio = shm7 + webrtc/metaband-audio.patch (real Opus audio
 # track with --audio_wav; identical to simulation_shm7 without it).
-RUN chmod +x /app/simulation_Release /app/simulation_shm7 /app/simulation_shm7_audio  && ln -sf /app/simulation_shm7_audio /app/simulation_video_save
+# simulation_shm7_audio_v2 = + webrtc/metaband-goog-mode.patch: PANDIA_EXT_MODE=goog applies field 7
+# inside GoogCC before the cwnd pushback (the RBWE integration); identical otherwise.
+RUN chmod +x /app/simulation_Release /app/simulation_shm7 /app/simulation_shm7_audio /app/simulation_shm7_audio_v2 && ln -sf /app/simulation_shm7_audio_v2 /app/simulation_video_save
 WORKDIR /app
 CMD ["python", "-um", "sb3_client_local"]
